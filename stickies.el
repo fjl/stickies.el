@@ -67,9 +67,19 @@ plist with `:background' and `:foreground' colors."
 Must be a key in `stickies-themes'."
   :type 'symbol)
 
+(defvar stickies--protected-faces
+  '(;; Faces handled specially or structural to a note's own rendering.
+    default header-line cursor fringe
+    border internal-border child-frame-border scroll-bar
+    vertical-border window-divider
+    window-divider-first-pixel window-divider-last-pixel)
+  "Faces never flattened, regardless of `stickies-flatten-exclude'.
+These are system-level faces that must keep their own colors: the
+note's own structural faces plus frame and window chrome.  Tinting
+them with a note's colors corrupts borders and cursors.")
+
 (defcustom stickies-flatten-exclude
-  '(default header-line cursor fringe
-    region secondary-selection highlight hl-line
+  '(region secondary-selection highlight hl-line
     isearch lazy-highlight isearch-fail match
     show-paren-match show-paren-mismatch
     minibuffer-prompt error warning success
@@ -77,7 +87,10 @@ Must be a key in `stickies-themes'."
     mode-line mode-line-inactive mode-line-buffer-id
     mode-line-emphasis mode-line-highlight
     tab-bar tab-bar-tab tab-bar-tab-inactive tab-line)
-  "Faces that keep their colors in sticky notes."
+  "Additional faces that keep their colors in sticky notes.
+Customize this to preserve more (or fewer) faces when flattening a
+note to its theme colors.  The faces in `stickies--protected-faces'
+are always excluded on top of these."
   :type '(repeat face))
 
 (defcustom stickies-face-remaps nil
@@ -256,16 +269,19 @@ Also applies user-defined overrides from `stickies-face-remaps'."
     ;; Fringe is set per-frame in `stickies--apply-fringe-color' rather
     ;; than via face-remap, because a buffer-local face-remap change
     ;; alone doesn't repaint the cached fringe pixels.
+    ;; Pin every non-excluded face to the theme colors -- including
+    ;; color-less faces such as `italic' and `bold'.  Skipping those (as
+    ;; an optimization) left text carrying them, e.g. italic enriched
+    ;; text, to inherit its background from the frame's default face,
+    ;; which shows through as a stray dark background under a dark global
+    ;; theme.  Setting only the colors preserves slant/weight/etc.
     (dolist (face (face-list))
-      (unless (memq face stickies-flatten-exclude)
-        (when (or (not (eq (face-attribute face :foreground nil nil)
-                           'unspecified))
-                  (not (eq (face-attribute face :background nil nil)
-                           'unspecified)))
-          (push (face-remap-add-relative face
-                                         :foreground fg
-                                         :background bg)
-                stickies--remap-cookies)))))
+      (unless (or (memq face stickies--protected-faces)
+                  (memq face stickies-flatten-exclude))
+        (push (face-remap-add-relative face
+                                       :foreground fg
+                                       :background bg)
+              stickies--remap-cookies))))
   (pcase-dolist (`(,face . ,spec) stickies-face-remaps)
     (push (apply #'face-remap-add-relative face spec)
           stickies--remap-cookies))
