@@ -998,7 +998,8 @@ back to a plain `read-string'.  INITIAL is the initial input."
   (interactive)
   (unless stickies-note-mode
     (user-error "Not in a sticky note buffer"))
-  (let* ((path buffer-file-name)
+  (let* ((buffer (current-buffer))
+         (path buffer-file-name)
          (basename (file-name-nondirectory path)))
     (when (yes-or-no-p (format "Delete sticky note %s? " basename))
       (dolist (frame (stickies--frames basename))
@@ -1006,8 +1007,9 @@ back to a plain `read-string'.  INITIAL is the initial input."
         ;; re-save geometry into an entry we're about to drop.
         (set-frame-parameter frame 'stickies-note nil)
         (ignore-errors (delete-frame frame)))
-      (set-buffer-modified-p nil)
-      (kill-buffer (current-buffer))
+      (with-current-buffer buffer
+        (set-buffer-modified-p nil))
+      (kill-buffer buffer)
       (delete-file path)
       (stickies--unregister basename))))
 
