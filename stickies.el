@@ -595,7 +595,7 @@ recursion."
                            :style toggle
                            :selected (stickies--rolled-up-p)]
                           "--"
-                          ["Close sticky note" delete-frame])))))
+                          ["Close note" delete-frame])))))
     (popup-menu menu event)))
 
 (defvar stickies-note-mode-map
