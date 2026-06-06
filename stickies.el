@@ -165,17 +165,33 @@ of notes naturally skip it."
   (with-temp-file (stickies--index-file)
     (let ((print-length nil)
           (print-level nil))
-      (insert ";; stickies index -- automatically generated\n")
-      (prin1 `(setq stickies--notes ',stickies--notes) (current-buffer))
+      (insert ";; sticky note index\n")
+      (prin1 stickies--notes (current-buffer))
       (insert "\n"))))
 
 (defun stickies--load-index ()
   "Load `stickies--notes' from the index file if present.
 Drops entries that no longer refer to existing files."
-  (let ((file (stickies--index-file)))
-    (when (file-readable-p file)
-      (load file nil t)))
-  (stickies--prune-index))
+  (let ((file (stickies--index-file)) index)
+    (if (file-exists-p file)
+        (with-temp-buffer
+          (insert-file-contents file)
+          (setq index (read (current-buffer)))))
+    (if (stickies--validate-index index)
+        (progn
+          (setq stickies--notes index)
+          (stickies--prune-index))
+      (message "Sticky note index %s is invalid. %s" file index)
+      (setq stickies--notes nil))))
+
+(defun stickies--validate-index (index)
+  (and (listp index)
+       (seq-every-p
+        (lambda (entry)
+          (and (listp entry)
+               (stringp (car entry))
+               (seq-every-p #'consp (cdr entry))))
+        index)))
 
 (defun stickies--prune-index ()
   "Drop index entries whose files no longer exist in `stickies-directory'."
