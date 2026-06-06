@@ -863,6 +863,7 @@ rename it afterwards."
   (interactive)
   (unless (file-directory-p stickies-directory)
     (make-directory stickies-directory t))
+  (stickies--load-index)
   (let* ((basename (stickies--next-basename))
          (path (stickies--note-path basename))
          (cell (stickies--register basename)))
@@ -880,12 +881,14 @@ rename it afterwards."
     (if existing
         (progn (make-frame-visible (car existing))
                (select-frame-set-input-focus (car existing)))
+      (stickies--load-index)
       (stickies--make-frame basename))))
 
 ;;;###autoload
 (defun stickies-show-all ()
   "Show every sticky note in `stickies-directory'."
   (interactive)
+  (stickies--load-index)
   (dolist (basename (stickies--all-notes))
     (let ((frames (stickies--frames basename)))
       (if frames
@@ -912,6 +915,7 @@ by other windows -- something Emacs has no API to detect."
   (interactive)
   (if (frame-parameter (selected-frame) 'stickies-note)
       (stickies-hide-all)
+    (stickies--load-index)
     (dolist (basename (stickies--all-notes))
       (let ((frames (stickies--frames basename)))
         (if frames
@@ -1026,13 +1030,5 @@ back to a plain `read-string'.  INITIAL is the initial input."
       (delete-file path)
       (stickies--unregister basename))))
 
-
-;;;; Initialization
-
-(condition-case err
-    (stickies--load-index)
-  (error (message "stickies: failed to load index: %s"
-                  (error-message-string err))))
-
+;; the end
 (provide 'stickies)
-;;; stickies.el ends here
