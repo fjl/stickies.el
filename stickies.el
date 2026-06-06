@@ -5,7 +5,7 @@
 ;; Author: Felix Lange <fjl@twurst.com>
 ;; Maintainer: Felix Lange <fjl@twurst.com>
 ;; Version: 0.1.0
-;; Package-Requires: ((emacs "27.1") (mini-frame "20220627.2041"))
+;; Package-Requires: ((emacs "29.1"))
 ;; Keywords: convenience
 ;; URL: https://github.com/fjl/stickies.el
 
@@ -34,10 +34,10 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'color)
 (require 'face-remap)
 (require 'files-x)
 (require 'easymenu)
-(require 'mini-frame)
 
 (defgroup stickies nil
   "Sticky notes in dedicated frames."
@@ -52,14 +52,17 @@ The per-note metadata index lives here too, in a hidden file."
   :type 'directory)
 
 (defcustom stickies-themes
-  '((yellow :background "#fff8b8" :foreground "#222222")
-    (pink   :background "#fcc9c9" :foreground "#222222")
-    (purple :background "#d8c9f0" :foreground "#222222")
-    (blue   :background "#c2dffc" :foreground "#222222")
-    (green  :background "#c5edc6" :foreground "#222222"))
+  '((yellow :background "#fff8b8" :foreground "#222222" :border "#cdb94f")
+    (pink   :background "#fcc9c9" :foreground "#222222" :border "#d68a8a")
+    (purple :background "#d8c9f0" :foreground "#222222" :border "#a98ad1")
+    (blue   :background "#c2dffc" :foreground "#222222" :border "#7fabd6")
+    (green  :background "#c5edc6" :foreground "#222222" :border "#85bd86"))
   "Named color themes for sticky notes.
-Each entry has the form (NAME PROPERTIES) where PROPERTIES is a
-plist with `:background' and `:foreground' colors."
+Each entry has the form (NAME PROPERTIES) where PROPERTIES is a plist with
+`:background' and `:foreground' colors and an optional `:border' color
+\(for the header line's underline and the minibuffer frame's edge).  When
+`:border' is omitted it is derived by darkening `:background' (see
+`stickies-border-darken')."
   :type '(alist :key-type symbol :value-type sexp))
 
 (defcustom stickies-default-theme 'yellow
@@ -72,7 +75,8 @@ Must be a key in `stickies-themes'."
     default header-line cursor fringe
     border internal-border child-frame-border scroll-bar
     vertical-border window-divider
-    window-divider-first-pixel window-divider-last-pixel)
+    window-divider-first-pixel window-divider-last-pixel
+    stickies-close-button-hover stickies-roll-button-hover)
   "Faces never flattened, regardless of `stickies-flatten-exclude'.
 These are system-level faces that must keep their own colors: the
 note's own structural faces plus frame and window chrome.")
@@ -81,15 +85,33 @@ note's own structural faces plus frame and window chrome.")
   '(region secondary-selection highlight hl-line
     isearch lazy-highlight isearch-fail match
     show-paren-match show-paren-mismatch
-    minibuffer-prompt error warning success
+    error warning success
     link mouse tooltip
     mode-line mode-line-inactive mode-line-buffer-id
     mode-line-emphasis mode-line-highlight
-    tab-bar tab-bar-tab tab-bar-tab-inactive tab-line)
+    tab-bar tab-bar-tab tab-bar-tab-inactive tab-line
+    ;; Completion-UI selection and match highlighting, so the current
+    ;; candidate and matched text stay visible in the minibuffer frame.
+    completions-common-part completions-first-difference completions-highlight
+    completions-annotations icomplete-selected-match
+    ivy-current-match ivy-minibuffer-match-highlight
+    ivy-minibuffer-match-face-1 ivy-minibuffer-match-face-2
+    ivy-minibuffer-match-face-3 ivy-minibuffer-match-face-4
+    swiper-match-face-1 swiper-match-face-2
+    swiper-match-face-3 swiper-match-face-4
+    vertico-current selectrum-current-candidate
+    orderless-match-face-0 orderless-match-face-1
+    orderless-match-face-2 orderless-match-face-3
+    helm-selection helm-match)
   "Additional faces that keep their colors in sticky notes.
-Customize this to preserve more (or fewer) faces when flattening a
-note to its theme colors. The faces in `stickies--protected-faces'
-are always excluded on top of these."
+Includes selection and match-highlight faces of the common completion
+UIs (built-in completions, ivy, swiper, vertico, selectrum, orderless,
+helm) so the current candidate stays visible in a note's minibuffer
+frame.  Faces not currently defined are simply ignored.
+
+Customize this to preserve more (or fewer) faces when flattening a note
+and its minibuffer frame to the theme colors.  The faces in
+`stickies--protected-faces' are always excluded on top of these."
   :type '(repeat face))
 
 (defcustom stickies-face-remaps nil
@@ -113,10 +135,16 @@ variables, and `:eval' forms.  Evaluated in the note's buffer."
   :type 'sexp
   :risky t)
 
+(defcustom stickies-header-text-height 0.8
+  "Scale of a note's chrome text relative to its body.
+Applies to the smaller text used for the header line and the minibuffer.
+A value below 1.0 makes them smaller than the note body; nil leaves them
+at the body's size."
+  :type '(choice (const :tag "Same as body" nil) number))
+
 (defvar stickies-frame-parameters
   '((width . 40)
     (height . 12)
-    (minibuffer . nil)
     (undecorated . t)
     (drag-with-header-line . t)
     (unsplittable . t)
@@ -125,8 +153,9 @@ variables, and `:eval' forms.  Evaluated in the note's buffer."
     (menu-bar-lines . 0)
     (tool-bar-lines . 0))
   "Default frame parameters for sticky note frames.
-A `(stickies-note . BASENAME)' marker is added automatically.
-Saved per-note geometry overrides these.")
+A `(stickies-note . BASENAME)' marker and a `minibuffer' pointing at the
+note's minibuffer child frame are added automatically (see
+`stickies--make-frame').  Saved per-note geometry overrides these.")
 
 (defcustom stickies-auto-save-interval 2
   "Idle seconds before a modified sticky note is auto-saved.
@@ -136,9 +165,6 @@ Set to nil to disable auto-saving."
 
 
 ;;;; Buffer-local note state
-
-(defvar-local stickies--remap-cookies nil
-  "List of cookies returned by `face-remap-add-relative' for this buffer.")
 
 
 ;;;; Index state and I/O
@@ -260,56 +286,96 @@ Drops entries that no longer refer to existing files."
     (cons (plist-get spec :background)
           (plist-get spec :foreground))))
 
-(defun stickies--apply-colors ()
-  "Apply sticky note colors and face flattening to the current buffer.
-Also applies user-defined overrides from `stickies-face-remaps'."
-  (dolist (c stickies--remap-cookies)
-    (face-remap-remove-relative c))
-  (setq stickies--remap-cookies nil)
-  (pcase-let ((`(,bg . ,fg) (stickies--theme-colors)))
-    (push (face-remap-add-relative 'default
-                                   :background bg
-                                   :foreground fg)
-          stickies--remap-cookies)
-    (push (face-remap-add-relative 'header-line
-                                   :background bg
-                                   :foreground fg
-                                   :height 0.8
-                                   :box nil
-                                   :underline nil
-                                   :overline nil)
-          stickies--remap-cookies)
-    ;; Fringe is set per-frame in `stickies--apply-fringe-color' rather
-    ;; than via face-remap, because a buffer-local face-remap change
-    ;; alone doesn't repaint the cached fringe pixels.
-    ;; Pin every non-excluded face to the theme colors -- including
-    ;; color-less faces such as `italic' and `bold'.  Skipping those (as
-    ;; an optimization) left text carrying them, e.g. italic enriched
-    ;; text, to inherit its background from the frame's default face,
-    ;; which shows through as a stray dark background under a dark global
-    ;; theme.  Setting only the colors preserves slant/weight/etc.
-    (dolist (face (face-list))
-      (unless (or (memq face stickies--protected-faces)
-                  (memq face stickies-flatten-exclude))
-        (push (face-remap-add-relative face
-                                       :foreground fg
-                                       :background bg)
-              stickies--remap-cookies))))
-  (pcase-dolist (`(,face . ,spec) stickies-face-remaps)
-    (push (apply #'face-remap-add-relative face spec)
-          stickies--remap-cookies))
-  (stickies--apply-fringe-color))
+(defcustom stickies-border-darken 18
+  "How much darker than the theme background a derived border is, in percent.
+Used only for a theme without an explicit `:border' (see `stickies-themes')."
+  :type 'integer)
 
-(defun stickies--apply-fringe-color ()
-  "Paint fringe of every frame showing this buffer with the theme bg.
-Setting the face attribute directly on the frame (rather than via
-buffer-local face-remapping) and following with `redraw-frame' is
-what reliably repaints the fringe area on a theme change."
-  (let ((bg (car (stickies--theme-colors))))
-    (dolist (window (get-buffer-window-list (current-buffer) nil t))
-      (let ((frame (window-frame window)))
-        (set-face-attribute 'fringe frame :background bg)
-        (redraw-frame frame)))))
+(defun stickies--theme-border ()
+  "Return the border color for the current buffer's theme.
+The theme's `:border', or `:background' darkened by `stickies-border-darken'."
+  (let* ((name (stickies--current-theme))
+         (spec (or (cdr (assq name stickies-themes))
+                   (cdr (assq stickies-default-theme stickies-themes)))))
+    (or (plist-get spec :border)
+        (color-darken-name (plist-get spec :background) stickies-border-darken))))
+
+(defun stickies--paint-frame-faces (frame bg fg border)
+  "Pin every non-excluded face of FRAME to BG/FG, frame-locally.
+Chrome blends into BG; the child-frame border uses BORDER.  Colors are
+set absolutely (not relative as `face-remap' would) so the user's global
+theme cannot show through -- both fg and bg are pinned, while
+slant/weight/etc. are left alone.  Used for both a note frame and its
+minibuffer child frame, so the prompt and completions match the note."
+  ;; `default' (and the area painted below buffer text) via frame params
+  ;; rather than the face, so it survives the face cache.
+  (set-frame-parameter frame 'background-color bg)
+  (set-frame-parameter frame 'foreground-color fg)
+  (set-face-attribute 'header-line frame
+                      :background bg
+                      :foreground fg
+                      :height (or stickies-header-text-height 1.0)
+                      ;; A faint box all around, matching the note
+                      ;; minibuffer's full border.  Positive line-width
+                      ;; insets the text by 1px, just as the minibuffer's
+                      ;; child-frame border insets its content -- so the
+                      ;; prompt lands exactly where the header text was,
+                      ;; with no 1px shift when the minibuffer appears.
+                      :box `(:line-width (1 . 1) :color ,border)
+                      :underline nil
+                      :overline nil)
+  ;; Fringe and other chrome blend into the background; the child-frame
+  ;; border (the minibuffer's visible 1px edge) uses the border color.
+  (dolist (face '(fringe internal-border border
+                  scroll-bar vertical-border window-divider
+                  window-divider-first-pixel window-divider-last-pixel))
+    (when (facep face) (set-face-attribute face frame :background bg)))
+  (when (facep 'child-frame-border)
+    (set-face-attribute 'child-frame-border frame :background border))
+  (when (facep 'cursor) (set-face-attribute 'cursor frame :background fg))
+  ;; Header-line button hover: a darker background (the border color), so
+  ;; it reads as a press target and meets the header's border seamlessly
+  ;; instead of painting the plain note background over it.
+  (dolist (face '(stickies-close-button-hover stickies-roll-button-hover))
+    (when (facep face)
+      (set-face-attribute face frame :background border :foreground fg :box nil)))
+  ;; Pin every other face to the theme colors -- including color-less
+  ;; faces such as `italic'/`bold', whose text would otherwise inherit
+  ;; the frame's background and show a stray patch under a dark global
+  ;; theme.  Setting only the colors preserves slant/weight/etc.
+  (dolist (face (face-list))
+    (unless (or (memq face stickies--protected-faces)
+                (memq face stickies-flatten-exclude))
+      (set-face-attribute face frame :foreground fg :background bg)))
+  (pcase-dolist (`(,face . ,spec) stickies-face-remaps)
+    (apply #'set-face-attribute face frame spec))
+  ;; Repaint the cached fringe/border pixels the attributes above don't.
+  (redraw-frame frame))
+
+(defun stickies--apply-frame-colors (frame)
+  "Paint note FRAME and its minibuffer child frame with its theme colors.
+The colors are attributes of the frames, not of the note's buffer: the
+same buffer shown elsewhere keeps that frame's normal faces, and nothing
+displayed in either frame -- buffer text, the prompt, completions,
+chrome, the empty area below the last line -- can escape the theme."
+  (when (frame-live-p frame)
+    (pcase-let ((`(,bg ,fg ,border)
+                 (with-current-buffer (stickies--frame-buffer frame)
+                   (let ((c (stickies--theme-colors)))
+                     (list (car c) (cdr c) (stickies--theme-border))))))
+      (stickies--paint-frame-faces frame bg fg border)
+      (when-let ((mini (stickies--minibuffer-frame-of frame)))
+        (stickies--paint-frame-faces mini bg fg border)))))
+
+(defun stickies--apply-colors ()
+  "Recolor the note frame(s) currently displaying the buffer.
+Called from a buffer context (mode setup, theme change); the actual
+painting is frame-local, see `stickies--apply-frame-colors'.  Only real
+note frames are touched, so the buffer shown elsewhere stays normal."
+  (dolist (window (get-buffer-window-list (current-buffer) nil t))
+    (let ((frame (window-frame window)))
+      (when (frame-parameter frame 'stickies-note)
+        (stickies--apply-frame-colors frame)))))
 
 
 ;;;; Header line
@@ -619,9 +685,6 @@ the corresponding sticky note frame when the buffer is killed."
     (kill-local-variable 'cursor-in-non-selected-windows)
     (kill-local-variable 'truncate-lines)
     (stickies--exit-rolled-up)
-    (dolist (c stickies--remap-cookies)
-      (face-remap-remove-relative c))
-    (setq stickies--remap-cookies nil)
     (remove-hook 'kill-buffer-hook #'stickies--on-buffer-killed t)))
 
 
@@ -717,10 +780,14 @@ target or ATTEMPTS (default 20) is exhausted."
          (entry (stickies--register basename))
          (saved (alist-get :params (cdr entry)))
          (rolled-up (alist-get :rolled-up (cdr entry)))
+         ;; The note's minibuffer child frame -- created first so the note
+         ;; can point its `minibuffer' parameter at its window.
+         (mini-frame (stickies--make-minibuffer-frame))
          ;; Order: per-note geometry first, then user defaults, then
          ;; required markers last (so they always win).
          (params (append `((stickies-note . ,basename)
-                           (name . ,(format "Sticky note: %s" basename)))
+                           (name . ,(format "Sticky note: %s" basename))
+                           (minibuffer . ,(minibuffer-window mini-frame)))
                          saved
                          stickies-frame-parameters))
          (buffer (find-file-noselect path))
@@ -728,8 +795,16 @@ target or ATTEMPTS (default 20) is exhausted."
          (window (frame-root-window frame)))
     (set-window-buffer window buffer)
     (set-window-dedicated-p window t)
-    (with-current-buffer buffer
-      (stickies--apply-fringe-color))
+    ;; Cross-link the note and its minibuffer frame, and make the latter a
+    ;; child of the note.
+    (set-frame-parameter frame 'stickies-minibuffer-frame mini-frame)
+    (set-frame-parameter mini-frame 'stickies-minibuffer frame)
+    (set-frame-parameter mini-frame 'parent-frame frame)
+    (stickies--apply-frame-colors frame)
+    ;; Position the minibuffer frame now (after the note's own creation
+    ;; hooks have run), so even the first echo message displays correctly
+    ;; without waiting for the first interactive read.
+    (stickies--position-minibuffer-frame mini-frame frame)
     ;; Restored geometry may point at a now-detached monitor; pull the
     ;; frame back onto a visible screen so it stays reachable.
     (stickies--clamp-frame-onscreen frame)
@@ -754,26 +829,290 @@ target or ATTEMPTS (default 20) is exhausted."
         (stickies--save-index)))))
 
 (defun stickies--on-frame-deleted (frame)
-  "Persist geometry when a sticky note FRAME is deleted."
+  "Persist geometry and delete the minibuffer child frame for note FRAME."
   (when (frame-parameter frame 'stickies-note)
-    (stickies--save-frame-state frame)))
+    (stickies--save-frame-state frame)
+    ;; Delete the minibuffer frame after the note is gone: it is the note's
+    ;; minibuffer, so it can't be deleted while the note lives.
+    (let ((mini (frame-parameter frame 'stickies-minibuffer-frame)))
+      (when (and (frame-live-p mini) (not (eq mini frame)))
+        (run-with-timer 0 nil
+                        (lambda ()
+                          (when (frame-live-p mini)
+                            (ignore-errors (delete-frame mini t)))))))))
 
 (add-hook 'delete-frame-functions #'stickies--on-frame-deleted)
 
-(defun stickies--raise-minibuffer-frame ()
-  "Focus the minibuffer's frame when entered from a sticky note frame.
-Sticky note frames have no minibuffer of their own, so commands that
-read input use the minibuffer of another frame.  Without focus
-following, the user cannot type into it."
-  (let* ((calling (minibuffer-selected-window))
-         (calling-frame (and calling (window-frame calling)))
-         (mini-frame (window-frame (minibuffer-window))))
-    (when (and calling-frame
-               (not (eq mini-frame calling-frame))
-               (frame-parameter calling-frame 'stickies-note))
-      (select-frame-set-input-focus mini-frame))))
+;; Each sticky note has its own minibuffer-only child frame, parented to
+;; it and set as its `minibuffer'.  It is hidden when idle and shown over
+;; the note's content during a read or isearch, so reads, completion and
+;; isearch all happen there natively while the note shows nothing when
+;; idle.
 
-(add-hook 'minibuffer-setup-hook #'stickies--raise-minibuffer-frame)
+(defvar minibuffer-prompt-properties)
+
+(defcustom stickies-minibuffer-resize t
+  "Whether a note's minibuffer frame grows to fit its content.
+When non-nil it grows downward over the note to fit the prompt and any
+completion list (so e.g. Ivy's candidates stay visible), bounded by the
+note's height.  Set to nil to keep it a single line; taller content then
+scrolls within it."
+  :type 'boolean)
+
+(defcustom stickies-minibuffer-max-lines nil
+  "Maximum height, in lines, of a note's minibuffer frame.
+nil means grow to fit the content, bounded only by the note's height --
+keeping a completion UI's current candidate visible.  An integer caps it
+further (more compact, but a long list may then be clipped)."
+  :type '(choice (const :tag "As tall as the note" nil) integer))
+
+
+(defvar stickies-minibuffer-frame-parameters
+  '((minibuffer . only)
+    (name . "stickies-minibuffer")
+    (undecorated . t)
+    (minibuffer-exit . t)               ; hide it when the minibuffer exits
+    (left-fringe . 0)
+    (right-fringe . 0)
+    (vertical-scroll-bars . nil)
+    (horizontal-scroll-bars . nil)
+    (menu-bar-lines . 0)
+    (tool-bar-lines . 0)
+    (child-frame-border-width . 0)
+    (internal-border-width . 0)
+    (desktop-dont-save . t)
+    (no-other-frame . t)
+    ;; Don't take focus when mapped: it would steal it from the note and
+    ;; (for isearch, whose keys are read in the note) end isearch at once.
+    (no-focus-on-map . t)
+    ;; Follow the note's width/left when it is resized (not its height).
+    (keep-ratio width-only . left-only)
+    (visibility . nil))
+  "Frame parameters for a note's minibuffer child frame.
+No `z-group': it already stacks above its parent, and `z-group above'
+makes it a free-floating draggable panel on macOS.")
+
+(defun stickies--make-minibuffer-frame ()
+  "Create and return a hidden minibuffer-only child frame for a note."
+  (let ((after-make-frame-functions nil))
+    (make-frame stickies-minibuffer-frame-parameters)))
+
+(defun stickies--minibuffer-frame-of (frame)
+  "Return the live minibuffer child frame for sticky note FRAME, or nil."
+  (let ((mini (frame-parameter frame 'stickies-minibuffer-frame)))
+    (and (frame-live-p mini) mini)))
+
+(defun stickies--minibuffer-error-function (data context caller)
+  "Display a command error DATA in a note's minibuffer.
+Like `minibuffer-error-function' but without its `discard-input', which
+busy-loops Emacs at 100% CPU in a minibuffer-only child frame (e.g. C-p
+at the start of history).  CONTEXT and CALLER are as for
+`command-error-default-function'."
+  (if (memq 'minibuffer-quit (get (car data) 'error-conditions))
+      (ding t)
+    (ding))
+  (let ((string (error-message-string data)))
+    (let ((inhibit-message t))
+      (message "%s%s" (if caller (format "%s: " caller) "") string))
+    (minibuffer-message (apply #'propertize (format " [%s%s]" context string)
+                               minibuffer-prompt-properties))))
+
+(defun stickies--position-minibuffer-frame (mini note)
+  "Position and theme MINI over NOTE's content area (without showing it).
+Idempotent, so it can run on every echo display to undo a config that
+re-applies frame parameters (e.g. a thick `child-frame-border-width') to
+all frames behind our back."
+  (when (and (frame-live-p mini) (frame-live-p note))
+    (pcase-let* ((`(,bg ,fg ,border)
+                  (with-current-buffer (stickies--frame-buffer note)
+                    (let ((c (stickies--theme-colors)))
+                      (list (car c) (cdr c) (stickies--theme-border)))))
+                 (fringes (window-fringes (frame-root-window note)))
+                 (left-fringe (or (nth 0 fringes) 0))
+                 (right-fringe (or (nth 1 fringes) 0))
+                 (native (frame-edges note 'native-edges))
+                 (inner (frame-edges note 'inner-edges)))
+      ;; Scale the frame's font so the prompt -- and everything else shown
+      ;; here (completion, isearch echo, messages) -- matches the note's
+      ;; header line, and the frame's line height matches so the line count
+      ;; is exact.
+      (let ((h (face-attribute 'default :height note)))
+        (when (and stickies-header-text-height (integerp h))
+          (set-face-attribute 'default mini :height
+                              (round (* stickies-header-text-height h)))))
+      ;; Anchor to the note's content corner, matching its fringes, with a
+      ;; faint 1px border.  Child-frame LEFT/TOP are relative to NOTE's
+      ;; native origin; the text width drops the fringes and border so the
+      ;; frame's outer edges meet the note's content edges (pixelwise, so
+      ;; the width isn't rounded to whole columns).
+      (modify-frame-parameters
+       mini
+       `((frame-resize-pixelwise . t)
+         (left . ,(- (nth 0 inner) (nth 0 native)))
+         (top . ,(- (nth 1 inner) (nth 1 native)))
+         (width text-pixels . ,(- (nth 2 inner) (nth 0 inner) left-fringe right-fringe 2))
+         (height . 1)
+         (child-frame-border-width . 1)
+         (internal-border-width . 0)
+         (left-fringe . ,left-fringe)
+         (right-fringe . ,right-fringe)
+         (background-color . ,bg)
+         (foreground-color . ,fg)))
+      (set-face-attribute 'fringe mini :background bg)
+      (when (facep 'child-frame-border)
+        (set-face-attribute 'child-frame-border mini :background border)))))
+
+(defun stickies--show-minibuffer-frame (mini note &optional no-focus)
+  "Position MINI over NOTE's content area, theme it, and show it.
+With NO-FOCUS non-nil leave input focus on NOTE (for isearch, whose keys
+are read in the note rather than the minibuffer)."
+  (when (and (frame-live-p mini) (frame-live-p note))
+    (stickies--position-minibuffer-frame mini note)
+    (make-frame-visible mini)
+    (unless no-focus
+      (redirect-frame-focus note mini))))
+
+(defun stickies--minibuffer-setup ()
+  "When a read starts on a note, show its minibuffer frame over it.
+On `minibuffer-setup-hook'.  A rolled-up note has no room, so roll it
+down first and remember to roll it back up on exit."
+  (let* ((mini (window-frame (selected-window)))
+         (note (frame-parameter mini 'stickies-minibuffer)))
+    (when (frame-live-p note)
+      (when (stickies--rolled-up-p note)
+        (set-frame-parameter note 'stickies-mini-rolled-down t)
+        (with-selected-frame note (stickies-toggle-roll-up)))
+      ;; Error handler that doesn't `discard-input' (see above).
+      (setq-local command-error-function #'stickies--minibuffer-error-function)
+      (stickies--show-minibuffer-frame mini note))))
+
+(defun stickies--minibuffer-exit ()
+  "Roll a note back up if `stickies--minibuffer-setup' rolled it down.
+On `minibuffer-exit-hook'."
+  (let* ((mini (window-frame (selected-window)))
+         (note (frame-parameter mini 'stickies-minibuffer)))
+    (when (and (frame-live-p note)
+               (frame-parameter note 'stickies-mini-rolled-down))
+      (set-frame-parameter note 'stickies-mini-rolled-down nil)
+      (with-selected-frame note (stickies-toggle-roll-up)))))
+
+(defun stickies--isearch-show ()
+  "Show the note's minibuffer frame for isearch's echo.
+On `isearch-mode-hook' (isearch uses the echo area, not a recursive
+minibuffer, so `minibuffer-exit' doesn't cover it).  Keep focus on the
+note so isearch reads its keys."
+  (when-let ((mini (stickies--minibuffer-frame-of (selected-frame))))
+    (stickies--show-minibuffer-frame mini (selected-frame) t)))
+
+(defun stickies--note-in-isearch-p (mini)
+  "Non-nil if MINI's note is currently in isearch."
+  (let ((note (frame-parameter mini 'stickies-minibuffer)))
+    (and (frame-live-p note)
+         (buffer-local-value 'isearch-mode (stickies--frame-buffer note)))))
+
+(defun stickies--hide-minibuffer-frames (&rest _)
+  "Hide note minibuffer frames that have nothing to read.
+Takes down a frame left up by a stray echo message (which `minibuffer-exit'
+does not catch).  A no-op while any read is active -- gated on
+`minibuffer-depth', which is stable mid-read (unlike
+`active-minibuffer-window'), so it never hides a frame being read in --
+and it leaves a frame alone while its note is in isearch."
+  (when (zerop (minibuffer-depth))
+    (dolist (f (frame-list))
+      (when (and (frame-parameter f 'stickies-minibuffer)
+                 (frame-visible-p f)
+                 (not (stickies--note-in-isearch-p f)))
+        (make-frame-invisible f)))))
+
+(defvar stickies--saved-resize-mini-frames 'unset
+  "Value of `resize-mini-frames' from before stickies took it over.")
+
+(defun stickies--minibuffer-frame-target-height (frame)
+  "Lines needed to show FRAME's minibuffer content.
+Bounded by the note's height (so a completion list's current candidate
+stays visible), and by `stickies-minibuffer-max-lines' if set."
+  (let* ((win (frame-root-window frame))
+         (char-h (frame-char-height frame))
+         (pixel-h (cdr (window-text-pixel-size win nil nil nil nil)))
+         (needed (max 1 (ceiling pixel-h char-h)))
+         (parent (or (frame-parameter frame 'parent-frame) frame))
+         (note-max (max 1 (1- (floor (frame-pixel-height parent) char-h)))))
+    (min needed (if stickies-minibuffer-max-lines
+                    (min stickies-minibuffer-max-lines note-max)
+                  note-max))))
+
+(defun stickies--resize-mini-frames (frame)
+  "Resize a note minibuffer FRAME to fit its content; defer otherwise.
+Installed as `resize-mini-frames'.  Grows for a completion list and
+shrinks back for a short message, using a height computed directly from
+the content rather than `fit-frame-to-buffer' (whose wrapping interplay
+can spin redisplay on macOS).  Other minibuffer frames keep whatever
+`resize-mini-frames' did before."
+  (if (frame-parameter frame 'stickies-minibuffer)
+      (when stickies-minibuffer-resize
+        (let ((target (stickies--minibuffer-frame-target-height frame)))
+          ;; Only on a real change -- a no-op resize re-enters redisplay.
+          (unless (= target (frame-height frame))
+            (set-frame-height frame target))))
+    (let ((prev stickies--saved-resize-mini-frames))
+      (cond ((functionp prev) (funcall prev frame))
+            ((and prev (not (eq prev 'unset))) (fit-frame-to-buffer frame))))))
+
+(defvar stickies--in-set-message nil
+  "Non-nil while inside `stickies--set-message-function', to avoid re-entry.")
+
+(defun stickies--set-message-function (_message)
+  "Position a note's minibuffer frame before an echo message maps it.
+On `set-message-functions'.  A plain message goes through neither
+`minibuffer-setup-hook' nor isearch's hook, so the note's minibuffer
+child frame would otherwise appear with whatever parameters were last
+set on it -- which a config that re-applies `default-frame-alist' to all
+frames may have clobbered.  Always returns nil, so the message itself is
+passed on to the rest of the list and displayed as usual.
+
+Only acts on a plain message (no interactive read -- `minibuffer-depth'
+zero): during a read, setup and `resize-mini-frames' already manage the
+frame, and this runs after Emacs has already mapped it."
+  (unless stickies--in-set-message
+    (let* ((stickies--in-set-message t)
+           (frame (selected-frame))
+           (mini (and (zerop (minibuffer-depth))
+                      (frame-parameter frame 'stickies-note)
+                      (stickies--minibuffer-frame-of frame))))
+      (when mini
+        (stickies--position-minibuffer-frame mini frame))))
+  nil)
+
+(defvar stickies--prev-clear-message-function nil
+  "Value of `clear-message-function' from before stickies chained onto it.")
+
+(defun stickies--clear-message-function ()
+  "Hide note minibuffer frames when the echo area is cleared.
+On `clear-message-function', which fires when the next input event
+arrives -- the precise moment a stray echo message goes away.  An active
+echo-area prompt (`y-or-n-p', `query-replace') is NOT cleared during its
+`read-event' wait, so its frame stays up, unlike with an idle timer that
+would take it down mid-prompt.  Chains to the previous function so the
+echo area is still cleared as usual."
+  (stickies--hide-minibuffer-frames)
+  (when (functionp stickies--prev-clear-message-function)
+    (funcall stickies--prev-clear-message-function)))
+
+;; Appended, so it runs after `minibuffer-error-initialize' and wins when
+;; installing `command-error-function'.
+(add-hook 'minibuffer-setup-hook #'stickies--minibuffer-setup t)
+(add-hook 'minibuffer-exit-hook #'stickies--minibuffer-exit)
+(add-hook 'isearch-mode-hook #'stickies--isearch-show)
+(add-hook 'isearch-mode-end-hook #'stickies--hide-minibuffer-frames)
+(add-hook 'set-message-functions #'stickies--set-message-function)
+
+(unless (eq clear-message-function #'stickies--clear-message-function)
+  (setq stickies--prev-clear-message-function clear-message-function
+        clear-message-function #'stickies--clear-message-function))
+
+(when (eq stickies--saved-resize-mini-frames 'unset)
+  (setq stickies--saved-resize-mini-frames resize-mini-frames))
+(setq resize-mini-frames #'stickies--resize-mini-frames)
 
 (defun stickies--on-buffer-killed ()
   "Close any sticky note frames showing this buffer."
@@ -939,44 +1278,15 @@ by other windows -- something Emacs has no API to detect."
     (user-error "Unknown theme: %s" name))
   (stickies--set-theme name))
 
-(defun stickies--read-name (prompt initial)
-  "Read a sticky-note name over the current note's frame.
-On a graphical display, show PROMPT in a borderless `mini-frame'
-child frame anchored to the top of the sticky note -- styled with
-the note's theme colors -- so the rename stays on the note instead
-of borrowing another frame's minibuffer.  On a text terminal, fall
-back to a plain `read-string'.  INITIAL is the initial input."
-  (if (display-graphic-p)
-      (pcase-let* ((`(,bg . ,fg) (stickies--theme-colors))
-                   (parent (selected-frame))
-                   (native (frame-edges parent 'native-edges))
-                   (inner (frame-edges parent 'inner-edges))
-                   (mini-frame-show-parameters
-                    ;; Child-frame LEFT/TOP are measured from the parent's
-                    ;; *native* origin, which sits inside the internal
-                    ;; border -- offset by it to land on the content
-                    ;; corner.  Size the text area in pixels to the
-                    ;; parent's inner width with no fringes, so the field's
-                    ;; edges match the note's content area exactly on every
-                    ;; platform (char/fringe math doesn't line up portably).
-                    `((left . ,(- (nth 0 inner) (nth 0 native)))
-                      (top . ,(- (nth 1 inner) (nth 1 native)))
-                      (width text-pixels . ,(- (nth 2 inner) (nth 0 inner)))
-                      (left-fringe . 0)
-                      (right-fringe . 0)
-                      (vertical-scroll-bars . nil)
-                      (horizontal-scroll-bars . nil)
-                      (background-color . ,bg)
-                      (foreground-color . ,fg)
-                      (child-frame-border-width . 0)
-                      (internal-border-width . 0))))
-        ;; Match the header line's reduced scale by remapping the
-        ;; minibuffer's default face; mini-frame then fits the child
-        ;; frame's height to this smaller content.
-        (minibuffer-with-setup-hook
-            (lambda () (face-remap-add-relative 'default :height 0.8))
-          (mini-frame-read-from-minibuffer #'read-string prompt initial)))
-    (read-string prompt initial)))
+;;;###autoload
+(defun stickies-refresh-faces ()
+  "Repaint every sticky note frame with its theme colors.
+Note colors are frame-local face attributes, which a configuration that
+re-applies `default-frame-alist' to all frames can clobber; call this
+afterwards (e.g. at the end of such a hook) to restore them."
+  (interactive)
+  (dolist (frame (stickies--frames))
+    (stickies--apply-frame-colors frame)))
 
 ;;;###autoload
 (defun stickies-rename (new-basename)
@@ -985,7 +1295,7 @@ back to a plain `read-string'.  INITIAL is the initial input."
    (progn
      (unless stickies-note-mode
        (user-error "Not in a sticky note buffer"))
-     (list (stickies--read-name
+     (list (read-string
             "New name: " (file-name-nondirectory buffer-file-name)))))
   (when (string-match-p "/" new-basename)
     (user-error "Name must not contain `/'"))
