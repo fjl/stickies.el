@@ -75,8 +75,7 @@ Must be a key in `stickies-themes'."
     window-divider-first-pixel window-divider-last-pixel)
   "Faces never flattened, regardless of `stickies-flatten-exclude'.
 These are system-level faces that must keep their own colors: the
-note's own structural faces plus frame and window chrome.  Tinting
-them with a note's colors corrupts borders and cursors.")
+note's own structural faces plus frame and window chrome.")
 
 (defcustom stickies-flatten-exclude
   '(region secondary-selection highlight hl-line
@@ -89,7 +88,7 @@ them with a note's colors corrupts borders and cursors.")
     tab-bar tab-bar-tab tab-bar-tab-inactive tab-line)
   "Additional faces that keep their colors in sticky notes.
 Customize this to preserve more (or fewer) faces when flattening a
-note to its theme colors.  The faces in `stickies--protected-faces'
+note to its theme colors. The faces in `stickies--protected-faces'
 are always excluded on top of these."
   :type '(repeat face))
 
@@ -110,9 +109,7 @@ Requires Emacs 29 or newer and a compositing window manager."
   "Title shown in a sticky note's header line.
 A mode-line construct (see `mode-line-format') rendered with
 `format-mode-line', so it may hold strings, %-constructs, your own
-variables, and `:eval' forms.  Evaluated in the note's buffer.
-The roll-up and close buttons are always appended after the title,
-whatever the format."
+variables, and `:eval' forms.  Evaluated in the note's buffer."
   :type 'sexp
   :risky t)
 
