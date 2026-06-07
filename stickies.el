@@ -1137,7 +1137,10 @@ echo area is still cleared as usual."
         (ignore-errors (delete-frame frame))))))
 
 (defun stickies--maybe-enable ()
-  "Enable `stickies-note-mode' for files under `stickies-directory'."
+  "Enable `stickies-note-mode' for note files under `stickies-directory'.
+Only real notes qualify; `stickies--note-basename' already rejects
+hidden, backup and auto-save files, so visiting e.g. the index file
+leaves the mode off."
   (when (and buffer-file-name
              (stickies--note-basename buffer-file-name)
              (not stickies-note-mode))
@@ -1149,52 +1152,65 @@ echo area is still cleared as usual."
 
 ;;;; Showing notes by raising their frame
 
-;; A sticky note's buffer lives in a dedicated frame.  When something
-;; tries to show that buffer elsewhere -- `switch-to-buffer', a
-;; `find-file' of an already-open note -- reveal the existing frame
-;; instead of duplicating the note in the current window.
+;; A sticky note's buffer lives in a dedicated frame.  Whenever something
+;; tries to show that buffer -- `find-file', `switch-to-buffer',
+;; `display-buffer' -- route it to the note's own frame instead of the
+;; current window, creating that frame if the note doesn't have one yet.
 
-(defun stickies--buffer-note-frame (buffer)
-  "Return a live sticky note frame showing BUFFER's note, or nil."
+(defvar stickies--opening-frame nil
+  "Non-nil while a note frame is being created.
+Guards `stickies--show-note-frame' against re-entering itself (via a
+nested display of the note buffer) while `stickies--make-frame' runs.")
+
+(defun stickies--buffer-note-basename (buffer)
+  "Return the note basename BUFFER visits, or nil if it isn't a note."
   (when (buffer-live-p buffer)
-    (when-let* ((file (buffer-file-name buffer))
-                (basename (stickies--note-basename file)))
-      (car (stickies--frames basename)))))
+    (when-let ((file (buffer-file-name buffer)))
+      (stickies--note-basename file))))
 
-(defun stickies--raise-note-frame (buffer)
-  "Raise the sticky note frame showing BUFFER, if any.  Return the frame or nil."
-  (when-let ((frame (stickies--buffer-note-frame buffer)))
-    (make-frame-visible frame)
-    (raise-frame frame)
-    (select-frame-set-input-focus frame)
-    frame))
+(defun stickies--show-note-frame (buffer)
+  "Reveal sticky note BUFFER in its own frame, creating the frame if needed.
+Return the frame, or nil if BUFFER is not a note (or a frame is already
+being created).  An existing frame is raised and focused; a note with no
+live frame gets a fresh one."
+  (unless stickies--opening-frame
+    (when-let ((basename (stickies--buffer-note-basename buffer)))
+      (let ((frame (car (stickies--frames basename))))
+        (unless frame
+          (let ((stickies--opening-frame t))
+            (stickies--load-index)
+            (setq frame (stickies--make-frame basename))))
+        (make-frame-visible frame)
+        (raise-frame frame)
+        (select-frame-set-input-focus frame)
+        frame))))
 
 (defun stickies--note-buffer-name-p (buffer-name &optional _action)
-  "Return non-nil if BUFFER-NAME is an open sticky note with a live frame."
-  (and (stickies--buffer-note-frame (get-buffer buffer-name)) t))
+  "Return non-nil if BUFFER-NAME names a sticky note buffer."
+  (and (stickies--buffer-note-basename (get-buffer buffer-name)) t))
 
-(defun stickies--display-buffer-raise-frame (buffer _alist)
-  "`display-buffer' action: reveal sticky-note BUFFER by raising its frame.
+(defun stickies--display-buffer-note-frame (buffer _alist)
+  "`display-buffer' action: show sticky-note BUFFER in its own frame.
 Return the frame's selected window, or nil to fall through to the
 default display."
-  (when-let ((frame (stickies--raise-note-frame buffer)))
+  (when-let ((frame (stickies--show-note-frame buffer)))
     (frame-selected-window frame)))
 
 (defun stickies--switch-to-buffer-advice (orig buffer-or-name &rest args)
-  "Around `switch-to-buffer': raise an open sticky note's frame.
-When BUFFER-OR-NAME names a sticky note that already has a live
-frame, raise that frame instead of showing the note in the
-current window.  ORIG is the wrapped `switch-to-buffer' and ARGS
-its remaining arguments, called unchanged otherwise."
+  "Around `switch-to-buffer': show a sticky note in its own frame.
+When BUFFER-OR-NAME names a sticky note, reveal that note's frame
+\(creating it if needed) instead of showing the note in the current
+window.  ORIG is the wrapped `switch-to-buffer' and ARGS its remaining
+arguments, called unchanged otherwise."
   (or (and buffer-or-name
            (let ((buffer (get-buffer buffer-or-name)))
-             (and (stickies--raise-note-frame buffer) buffer)))
+             (and (stickies--show-note-frame buffer) buffer)))
       (apply orig buffer-or-name args)))
 
 (advice-add 'switch-to-buffer :around #'stickies--switch-to-buffer-advice)
 
 (add-to-list 'display-buffer-alist
-             '(stickies--note-buffer-name-p stickies--display-buffer-raise-frame))
+             '(stickies--note-buffer-name-p stickies--display-buffer-note-frame))
 
 
 ;;;; Interactive commands
