@@ -211,6 +211,7 @@ Drops entries that no longer refer to existing files."
       (setq stickies--notes nil))))
 
 (defun stickies--validate-index (index)
+  "Return non-nil if INDEX is a well-formed sticky note index."
   (and (listp index)
        (seq-every-p
         (lambda (entry)
@@ -944,8 +945,8 @@ makes it a free-floating draggable panel on macOS.")
 (defun stickies--minibuffer-error-function (data context caller)
   "Display a command error DATA in a note's minibuffer.
 Like `minibuffer-error-function' but without its `discard-input', which
-busy-loops Emacs at 100% CPU in a minibuffer-only child frame (e.g. C-p
-at the start of history).  CONTEXT and CALLER are as for
+busy-loops Emacs at 100% CPU in a minibuffer-only child frame (e.g. when
+moving past the start of history).  CONTEXT and CALLER are as for
 `command-error-default-function'."
   (if (memq 'minibuffer-quit (get (car data) 'error-conditions))
       (ding t)
@@ -1012,7 +1013,7 @@ are read in the note rather than the minibuffer)."
       (redirect-frame-focus note mini))))
 
 (defun stickies--minibuffer-setup ()
-  "When a read starts on a note, show its minibuffer frame over it.
+  "Show a note's minibuffer frame over it during a minibuffer read.
 On `minibuffer-setup-hook'.  A rolled-up note has no room, so roll it
 down first and remember to roll it back up on exit."
   (let* ((mini (window-frame (selected-window)))
@@ -1084,8 +1085,9 @@ stays visible), and by `stickies-minibuffer-max-lines' if set."
   "Resize a note minibuffer FRAME to fit its content; defer otherwise.
 Installed as `resize-mini-frames'.  Grows for a completion list and
 shrinks back for a short message, using a height computed directly from
-the content rather than `fit-frame-to-buffer' (whose wrapping interplay
-can spin redisplay on macOS).  Other minibuffer frames keep whatever
+the content rather than the function `fit-frame-to-buffer' (whose
+wrapping interplay can spin redisplay on macOS).  Other minibuffer
+frames keep whatever
 `resize-mini-frames' did before."
   (if (frame-parameter frame 'stickies-minibuffer)
       (when stickies-minibuffer-resize
@@ -1102,7 +1104,7 @@ can spin redisplay on macOS).  Other minibuffer frames keep whatever
 
 (defun stickies--set-message-function (_message)
   "Position a note's minibuffer frame before an echo message maps it.
-On `set-message-functions'.  A plain message goes through neither
+On the variable `set-message-functions'.  A plain message goes through neither
 `minibuffer-setup-hook' nor isearch's hook, so the note's minibuffer
 child frame would otherwise appear with whatever parameters were last
 set on it -- which a config that re-applies `default-frame-alist' to all
@@ -1379,5 +1381,5 @@ afterwards (e.g. at the end of such a hook) to restore them."
       (delete-file path)
       (stickies--unregister basename))))
 
-;; the end
 (provide 'stickies)
+;;; stickies.el ends here
