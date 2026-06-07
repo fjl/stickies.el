@@ -838,10 +838,18 @@ target or ATTEMPTS (default 20) is exhausted."
          ;; can point its `minibuffer' parameter at its window.
          (mini-frame (stickies--make-minibuffer-frame))
          ;; Order: per-note geometry first, then user defaults, then
-         ;; required markers last (so they always win).
+         ;; required markers last (so they always win).  Created hidden
+         ;; (`visibility' nil): the note and its minibuffer child frame must
+         ;; be fully linked, themed and positioned BEFORE they first render.
+         ;; Otherwise -- the note frame being visible from birth -- the NS
+         ;; port maps the child frame (which shares the note's minibuffer)
+         ;; with the still-default config, and a message arriving in that
+         ;; window shows oversized in the unscaled (1.0) font until the next
+         ;; message's resize corrects it.
          (params (append `((stickies-note . ,basename)
                            (name . ,(format "Sticky note: %s" basename))
-                           (minibuffer . ,(minibuffer-window mini-frame)))
+                           (minibuffer . ,(minibuffer-window mini-frame))
+                           (visibility . nil))
                          saved
                          stickies-frame-parameters))
          (buffer (find-file-noselect path))
@@ -855,15 +863,14 @@ target or ATTEMPTS (default 20) is exhausted."
     (set-frame-parameter mini-frame 'stickies-minibuffer frame)
     (set-frame-parameter mini-frame 'parent-frame frame)
     (stickies--apply-frame-colors frame)
-    ;; Position the minibuffer frame now (after the note's own creation
-    ;; hooks have run), so even the first echo message displays correctly
-    ;; without waiting for the first interactive read.
+    ;; Position (and scale the font of) the minibuffer frame while the note
+    ;; is still hidden, so it is fully configured before its first render.
     (stickies--position-minibuffer-frame mini-frame frame)
-    ;; Explicitly hide it: on the NS port a child frame is mapped along
-    ;; with its parent regardless of its `visibility' nil parameter, so
-    ;; the frame would otherwise sit over the note (with the stale
-    ;; geometry computed above, before placement is final) until the
-    ;; first echo message or read repositioned and hid it.
+    ;; Reveal the fully-configured note.  On the NS port its child minibuffer
+    ;; frame is mapped along with it regardless of its own `visibility' nil,
+    ;; so hide it again afterwards -- it realizes with the correct config and
+    ;; then stays down until the first echo message or read shows it.
+    (make-frame-visible frame)
     (make-frame-invisible mini-frame t)
     ;; Restored geometry may point at a now-detached monitor; pull the
     ;; frame back onto a visible screen so it stays reachable.  Done
