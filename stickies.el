@@ -159,9 +159,6 @@ Set to nil to disable auto-saving."
                  (const :tag "Off" nil)))
 
 
-;;;; Buffer-local note state
-
-
 ;;;; Index state and I/O
 
 (defvar stickies--notes nil
