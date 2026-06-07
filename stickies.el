@@ -717,6 +717,9 @@ the corresponding sticky note frame when the buffer is killed."
 Captures geometry plus toggles like `z-group'.
 If FRAME is currently rolled up, save the pre-rolled (expanded)
 height so a restored frame doesn't come back as a tiny strip.
+`left'/`top' are clamped to non-negative: a negative position (a note
+dragged off the top/left edge) is read by `make-frame' as an offset from
+the opposite edge, flinging the note off-screen on restore.
 Parameters that are nil are dropped: persisting e.g. a nil `left'/`top'
 (as can happen for a not-yet-positioned frame) would feed nil back to
 `make-frame', which errors on some ports (NS: \"integerp, nil\")."
@@ -725,8 +728,10 @@ Parameters that are nil are dropped: persisting e.g. a nil `left'/`top'
    `((width   . ,(frame-parameter frame 'width))
      (height  . ,(or (stickies--rolled-up-p frame)
                      (frame-parameter frame 'height)))
-     (left    . ,(frame-parameter frame 'left))
-     (top     . ,(frame-parameter frame 'top))
+     (left    . ,(let ((l (frame-parameter frame 'left)))
+                   (and (integerp l) (max 0 l))))
+     (top     . ,(let ((tp (frame-parameter frame 'top)))
+                   (and (integerp tp) (max 0 tp))))
      (z-group . ,(frame-parameter frame 'z-group)))))
 
 (defun stickies--monitor-workareas (frame)
@@ -747,7 +752,7 @@ Saved geometry can point at a monitor that is no longer attached;
 without this a restored sticky note comes back off-screen and
 unreachable.  Clamp to the monitor FRAME most overlaps, or the
 first (primary) one when it overlaps none."
-  (when (display-graphic-p frame)
+  (when (and (frame-live-p frame) (display-graphic-p frame))
     (pcase-let* ((`(,fl ,ft ,fr ,fb) (frame-edges frame 'outer-edges))
                  (fw (- fr fl))
                  (fh (- fb ft))
@@ -834,8 +839,10 @@ target or ATTEMPTS (default 20) is exhausted."
     ;; first echo message or read repositioned and hid it.
     (make-frame-invisible mini-frame t)
     ;; Restored geometry may point at a now-detached monitor; pull the
-    ;; frame back onto a visible screen so it stays reachable.
-    (stickies--clamp-frame-onscreen frame)
+    ;; frame back onto a visible screen so it stays reachable.  Deferred:
+    ;; right after `make-frame' the NS port hasn't placed the frame yet, so
+    ;; `frame-edges' reads stale geometry and the clamp would no-op.
+    (run-with-timer 0 nil #'stickies--clamp-frame-onscreen frame)
     (when rolled-up
       ;; Defer the roll-up: a synchronous resize inside `make-frame'
       ;; lands before the WM has finished sizing the new frame and gets
@@ -1263,6 +1270,7 @@ rename it afterwards."
     (let ((existing (stickies--frames basename)))
       (if existing
           (progn (make-frame-visible (car existing))
+                 (stickies--clamp-frame-onscreen (car existing))
                  (select-frame-set-input-focus (car existing)))
         (stickies--load-index)
         (stickies--make-frame basename)))))
@@ -1277,7 +1285,9 @@ Only supported on graphical frames."
   (dolist (basename (stickies--all-notes))
     (let ((frames (stickies--frames basename)))
       (if frames
-          (dolist (f frames) (make-frame-visible f))
+          (dolist (f frames)
+            (make-frame-visible f)
+            (stickies--clamp-frame-onscreen f))
         (stickies--make-frame basename)))))
 
 ;;;###autoload
@@ -1311,6 +1321,7 @@ Only supported on graphical frames."
         (if frames
             (dolist (f frames)
               (make-frame-visible f)
+              (stickies--clamp-frame-onscreen f)
               (raise-frame f))
           (raise-frame (stickies--make-frame basename)))))))
 
