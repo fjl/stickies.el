@@ -1310,16 +1310,6 @@ by other windows -- something Emacs has no API to detect."
   (stickies--set-theme name))
 
 ;;;###autoload
-(defun stickies-refresh-faces ()
-  "Repaint every sticky note frame with its theme colors.
-Note colors are frame-local face attributes, which a configuration that
-re-applies `default-frame-alist' to all frames can clobber; call this
-afterwards (e.g. at the end of such a hook) to restore them."
-  (interactive)
-  (dolist (frame (stickies--frames))
-    (stickies--apply-frame-colors frame)))
-
-;;;###autoload
 (defun stickies-rename (new-basename)
   "Rename the current sticky note to NEW-BASENAME (within `stickies-directory')."
   (interactive
