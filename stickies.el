@@ -234,13 +234,28 @@ Drops entries that no longer refer to existing files."
   "Return the absolute path for BASENAME under `stickies-directory'."
   (expand-file-name basename stickies-directory))
 
+(defun stickies--note-file-p (basename)
+  "Return non-nil if BASENAME names a real sticky note file.
+Excludes hidden files (leading dot -- the index, lock files such as
+`.#note.txt', etc.), Emacs backup files (trailing `~') and auto-save
+files (`#note.txt#'), none of which should be opened as notes."
+  (and (stringp basename)
+       (not (string-empty-p basename))
+       (not (string-prefix-p "." basename))
+       (not (string-suffix-p "~" basename))
+       (not (and (string-prefix-p "#" basename)
+                 (string-suffix-p "#" basename)))))
+
 (defun stickies--note-basename (path)
-  "Return PATH's basename if it lives under `stickies-directory', else nil."
+  "Return PATH's basename if it is a note file under `stickies-directory'.
+Returns nil for paths outside the directory and for non-note files
+\(hidden, backup or auto-save files; see `stickies--note-file-p')."
   (and path
        (file-directory-p stickies-directory)
        (let ((p (expand-file-name path)))
          (when (file-in-directory-p p stickies-directory)
-           (file-name-nondirectory p)))))
+           (let ((basename (file-name-nondirectory p)))
+             (and (stickies--note-file-p basename) basename))))))
 
 (defun stickies--entry (basename)
   "Return the index cell for BASENAME, or nil."
@@ -263,9 +278,12 @@ Drops entries that no longer refer to existing files."
   (stickies--save-index))
 
 (defun stickies--all-notes ()
-  "Return basenames of all files in `stickies-directory' (no dotfiles)."
+  "Return basenames of all note files in `stickies-directory'.
+Hidden, backup and auto-save files are excluded; see
+`stickies--note-file-p'."
   (when (file-directory-p stickies-directory)
-    (directory-files stickies-directory nil "\\`[^.]")))
+    (cl-remove-if-not #'stickies--note-file-p
+                      (directory-files stickies-directory))))
 
 
 ;;;; Color application
