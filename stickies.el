@@ -1172,6 +1172,15 @@ echo area is still cleared as usual."
 (add-hook 'isearch-mode-end-hook #'stickies--hide-minibuffer-frames)
 (add-hook 'set-message-functions #'stickies--set-message-function)
 
+;; On the NS port a child frame is mapped together with its parent, so a
+;; note's minibuffer child frame reappears whenever its note gains focus --
+;; with nothing to read.  Take such idle frames down on every focus change,
+;; not only on the next input event (via `clear-message-function').  The
+;; handler runs after Emacs has processed the focus event (so after the map)
+;; and is a no-op mid-read (see `stickies--hide-minibuffer-frames').
+(add-function :after after-focus-change-function
+              #'stickies--hide-minibuffer-frames)
+
 (unless (eq clear-message-function #'stickies--clear-message-function)
   (setq stickies--prev-clear-message-function clear-message-function
         clear-message-function #'stickies--clear-message-function))
