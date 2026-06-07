@@ -638,13 +638,21 @@ Writes the index file at most once even when several frames are dirty."
             (when cell
               (let ((cur-params (stickies--frame-geometry frame))
                     (cur-roll   (and (stickies--rolled-up-p frame) t))
+                    (cur-scale  (with-current-buffer (stickies--frame-buffer frame)
+                                  (if (boundp 'text-scale-mode-amount)
+                                      text-scale-mode-amount
+                                    0)))
                     (saved-params (alist-get :params (cdr cell)))
-                    (saved-roll   (alist-get :rolled-up (cdr cell))))
+                    (saved-roll   (alist-get :rolled-up (cdr cell)))
+                    (saved-scale  (or (alist-get :text-scale (cdr cell)) 0)))
                 (unless (equal cur-params saved-params)
                   (setf (alist-get :params (cdr cell)) cur-params)
                   (setq dirty t))
                 (unless (eq cur-roll saved-roll)
                   (setf (alist-get :rolled-up (cdr cell)) cur-roll)
+                  (setq dirty t))
+                (unless (eql cur-scale saved-scale)
+                  (setf (alist-get :text-scale (cdr cell)) cur-scale)
                   (setq dirty t))))))))
     (when dirty
       (stickies--save-index))))
@@ -656,6 +664,18 @@ Writes the index file at most once even when several frames are dirty."
     (setq stickies--auto-save-timer
           (run-with-idle-timer stickies-auto-save-interval t
                                #'stickies--auto-save-tick))))
+
+
+;;;; Text scale
+
+(defun stickies--apply-text-scale ()
+  "Apply the current sticky note buffer's stored text-scale, if any.
+The amount is read from the buffer's index entry (see
+`stickies--save-stale-frame-state', which persists it)."
+  (when-let* ((basename (and buffer-file-name
+                             (stickies--note-basename buffer-file-name)))
+              (amount (alist-get :text-scale (cdr (stickies--entry basename)))))
+    (text-scale-set amount)))
 
 
 ;;;; Minor mode
@@ -678,6 +698,7 @@ the corresponding sticky note frame when the buffer is killed."
         (setq-local cursor-in-non-selected-windows nil)
         (setq-local truncate-lines nil)
         (stickies--apply-colors)
+        (stickies--apply-text-scale)
         (stickies--ensure-auto-save-timer)
         (add-hook 'kill-buffer-hook #'stickies--on-buffer-killed nil t))
     (kill-local-variable 'mode-line-format)
