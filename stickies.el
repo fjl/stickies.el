@@ -539,21 +539,31 @@ resize it vertically are undone, while width changes are kept."
       (stickies--apply-roll-height frame))
     (stickies--save-frame-state frame)))
 
-(defun stickies--keep-roll-height-on-resize (frame)
-  "Undo vertical resizing of a rolled-up sticky note FRAME.
-A rolled-up sticky note has a fixed height; any resize that changes
-its height is reverted to the rolled-up height, while width
-changes are left intact.  The `set-frame-height' inside
-`stickies--apply-roll-height' re-enters this hook, but the height
-then matches `stickies-roll-height' so the guard stops the
-recursion."
-  (when (and (frame-parameter frame 'stickies-note)
-             (stickies--rolled-up-p frame)
-             (not (equal (frame-text-height frame)
-                         (frame-parameter frame 'stickies-roll-height))))
-    (stickies--apply-roll-height frame)))
+(defvar stickies-min-size '(15 . 3)
+  "Minimum size (WIDTH . HEIGHT), in characters, of a sticky note frame.
+Without this a note can be dragged down to an unusable sliver, as
+undecorated frames don't get a minimum size enforced by the window
+manager.  The height floor is skipped while a note is rolled up, which
+has its own fixed height.")
 
-(add-hook 'window-size-change-functions #'stickies--keep-roll-height-on-resize)
+(defun stickies--constrain-size-on-resize (frame)
+  "Hold sticky note FRAME within its size constraints after a resize.
+The width is always floored at `stickies-min-size'.  A rolled-up note has
+a fixed height, reverted to `stickies-roll-height'; otherwise the height
+is floored at `stickies-min-size' too.  Setting the size re-enters this
+hook, but the size then satisfies the constraint so the guard stops the
+recursion."
+  (when (frame-parameter frame 'stickies-note)
+    (when (< (frame-width frame) (car stickies-min-size))
+      (set-frame-width frame (car stickies-min-size)))
+    (if (stickies--rolled-up-p frame)
+        (unless (equal (frame-text-height frame)
+                       (frame-parameter frame 'stickies-roll-height))
+          (stickies--apply-roll-height frame))
+      (when (< (frame-height frame) (cdr stickies-min-size))
+        (set-frame-height frame (cdr stickies-min-size))))))
+
+(add-hook 'window-size-change-functions #'stickies--constrain-size-on-resize)
 
 (defun stickies--save-all-frame-state ()
   "Persist geometry of every visible sticky note frame."
