@@ -1331,7 +1331,15 @@ Only supported on graphical frames."
   (stickies--ensure-graphic)
   (dolist (frame (stickies--frames))
     (stickies--save-frame-state frame)
-    (make-frame-invisible frame t)))
+    (make-frame-invisible frame t))
+  ;; Hiding every note leaves no frame selected; focus the foremost
+  ;; visible non-note frame (stacking order), i.e. the one behind the notes.
+  (when-let ((frame (seq-find
+                     (lambda (f)
+                       (and (frame-visible-p f)
+                            (not (frame-parameter f 'stickies-note))))
+                     (or (frame-list-z-order) (frame-list)))))
+    (select-frame-set-input-focus frame)))
 
 ;;;###autoload
 (defun stickies-toggle ()
