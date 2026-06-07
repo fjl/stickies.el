@@ -976,6 +976,17 @@ moving past the start of history).  CONTEXT and CALLER are as for
     (minibuffer-message (apply #'propertize (format " [%s%s]" context string)
                                minibuffer-prompt-properties))))
 
+(defun stickies--scale-minibuffer-font (mini)
+  "Scale MINI's font to `stickies-header-text-height' of its note's font.
+So the prompt, completion, isearch echo and messages match the note's
+header line, with a matching line height for an exact line count."
+  (when stickies-header-text-height
+    (let* ((note (frame-parameter mini 'stickies-minibuffer))
+           (h (and (frame-live-p note) (face-attribute 'default :height note)))
+           (target (and (integerp h) (round (* stickies-header-text-height h)))))
+      (when (and target (not (eql target (face-attribute 'default :height mini))))
+        (set-face-attribute 'default mini :height target)))))
+
 (defun stickies--position-minibuffer-frame (mini note)
   "Position and theme MINI over NOTE's content area (without showing it).
 Idempotent, so it can run on every echo display to undo a config that
@@ -991,14 +1002,7 @@ all frames behind our back."
                  (right-fringe (or (nth 1 fringes) 0))
                  (native (frame-edges note 'native-edges))
                  (inner (frame-edges note 'inner-edges)))
-      ;; Scale the frame's font so the prompt -- and everything else shown
-      ;; here (completion, isearch echo, messages) -- matches the note's
-      ;; header line, and the frame's line height matches so the line count
-      ;; is exact.
-      (let ((h (face-attribute 'default :height note)))
-        (when (and stickies-header-text-height (integerp h))
-          (set-face-attribute 'default mini :height
-                              (round (* stickies-header-text-height h)))))
+      (stickies--scale-minibuffer-font mini)
       ;; Anchor to the note's content corner, matching its fringes, with a
       ;; faint 1px border.  Child-frame LEFT/TOP are relative to NOTE's
       ;; native origin; the text width drops the fringes and border so the
@@ -1107,10 +1111,15 @@ wrapping interplay can spin redisplay on macOS).  Other minibuffer
 frames keep whatever
 `resize-mini-frames' did before."
   (if (frame-parameter frame 'stickies-minibuffer)
-      (let ((target (stickies--minibuffer-frame-target-height frame)))
-        ;; Only on a real change -- a no-op resize re-enters redisplay.
-        (unless (= target (frame-height frame))
-          (set-frame-height frame target)))
+      (progn
+        ;; Re-assert the scaled font first: it may have been reset since the
+        ;; frame was last shown (see `stickies--scale-minibuffer-font'), and
+        ;; the line count below divides by the resulting char height.
+        (stickies--scale-minibuffer-font frame)
+        (let ((target (stickies--minibuffer-frame-target-height frame)))
+          ;; Only on a real change -- a no-op resize re-enters redisplay.
+          (unless (= target (frame-height frame))
+            (set-frame-height frame target))))
     (let ((prev stickies--saved-resize-mini-frames))
       (cond ((functionp prev) (funcall prev frame))
             ((and prev (not (eq prev 'unset))) (fit-frame-to-buffer frame))))))
