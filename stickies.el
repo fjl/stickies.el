@@ -552,8 +552,13 @@ The width is always floored at `stickies-min-size'.  A rolled-up note has
 a fixed height, reverted to `stickies-roll-height'; otherwise the height
 is floored at `stickies-min-size' too.  Setting the size re-enters this
 hook, but the size then satisfies the constraint so the guard stops the
-recursion."
-  (when (frame-parameter frame 'stickies-note)
+recursion.
+
+Skipped until the frame is fully built (`stickies-ready'): resizing a
+frame mid-realization repaints the NS body with the system appearance,
+losing the theme background."
+  (when (and (frame-parameter frame 'stickies-note)
+             (frame-parameter frame 'stickies-ready))
     (when (< (frame-width frame) (car stickies-min-size))
       (set-frame-width frame (car stickies-min-size)))
     (if (stickies--rolled-up-p frame)
@@ -849,10 +854,13 @@ target or ATTEMPTS (default 20) is exhausted."
     ;; first echo message or read repositioned and hid it.
     (make-frame-invisible mini-frame t)
     ;; Restored geometry may point at a now-detached monitor; pull the
-    ;; frame back onto a visible screen so it stays reachable.  Deferred:
-    ;; right after `make-frame' the NS port hasn't placed the frame yet, so
-    ;; `frame-edges' reads stale geometry and the clamp would no-op.
-    (run-with-timer 0 nil #'stickies--clamp-frame-onscreen frame)
+    ;; frame back onto a visible screen so it stays reachable.  Done
+    ;; synchronously: a deferred clamp fires during the NS port's async
+    ;; frame realization and repaints the body with the system appearance
+    ;; (`ns-appearance'), losing the theme background.  The show paths
+    ;; (`stickies-toggle' etc.) clamp again once the frame is placed, which
+    ;; covers the off-screen-recovery case.
+    (stickies--clamp-frame-onscreen frame)
     (when rolled-up
       ;; Defer the roll-up: a synchronous resize inside `make-frame'
       ;; lands before the WM has finished sizing the new frame and gets
@@ -860,6 +868,9 @@ target or ATTEMPTS (default 20) is exhausted."
       ;; keeps re-applying the rolled-up height until the WM honors the
       ;; pixel-precise request.
       (run-with-timer 0 nil #'stickies--roll-up-on-open frame))
+    ;; Mark the frame fully built so size-change handlers may act on it
+    ;; (see `stickies--constrain-size-on-resize').
+    (set-frame-parameter frame 'stickies-ready t)
     frame))
 
 (defun stickies--save-frame-state (frame)
