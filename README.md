@@ -10,6 +10,15 @@ the content. Org-mode checklists, spreadsheets, enriched-mode, inline images...
 
 ![Screenshot](./images/screenshot.png)
 
+## Installation
+
+At this time, stickies.el is not yet available in MELPA. You have to add it to your
+load path somehow and then require it in your Emacs configuration:
+
+```elisp
+(require 'stickies)
+```
+
 ## Commands
 
 - `stickies-new` — create a new note.
@@ -20,15 +29,6 @@ the content. Org-mode checklists, spreadsheets, enriched-mode, inline images...
 - `stickies-delete` — delete the current note on disk (asks for confirmation).
 - `stickies-set-theme` — set the current note's color theme.
 
-## Installation
-
-At this time, stickies.el is not yet available in MELPA or any other repository.
-So you have to acquire it somehow and then load it in your Emacs configuration:
-
-```elisp
-(require 'stickies)
-```
-
 I recommend binding at least `stickies-new` and `stickies-toggle` to easily-reachable
 keys. Since stickies is GUI-only anyway, you can use super-keys:
 
@@ -36,4 +36,3 @@ keys. Since stickies is GUI-only anyway, you can use super-keys:
 (keymap-global-set "s--" 'stickies-new)
 (keymap-global-set "s-+" 'stickies-toggle)
 ```
-
