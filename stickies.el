@@ -122,11 +122,6 @@ accepted by `face-remap-add-relative', e.g.
 Applied last so they override flattening."
   :type '(alist :key-type face :value-type sexp))
 
-(defcustom stickies-translucent-alpha 75
-  "Background alpha (0-100) applied when a sticky note is made translucent.
-Requires Emacs 29 or newer and a compositing window manager."
-  :type 'integer)
-
 (defcustom stickies-title-format '("%b")
   "Title shown in a sticky note's header line.
 A mode-line construct (see `mode-line-format') rendered with
@@ -467,26 +462,12 @@ The value is the pre-rolled frame height, in lines."
   "Return non-nil if FRAME (defaults to selected) stays above other windows."
   (eq (frame-parameter frame 'z-group) 'above))
 
-(defun stickies--translucent-p (&optional frame)
-  "Return non-nil if FRAME (defaults to selected) is translucent."
-  (let ((a (frame-parameter frame 'alpha-background)))
-    (and (numberp a) (< a 100))))
-
 (defun stickies-toggle-always-on-top ()
   "Toggle whether the current sticky note frame stays above other windows."
   (interactive)
   (let ((frame (selected-frame)))
     (set-frame-parameter
      frame 'z-group (if (stickies--always-on-top-p frame) nil 'above))
-    (stickies--save-frame-state frame)))
-
-(defun stickies-toggle-translucent ()
-  "Toggle background translucency of the current sticky note frame."
-  (interactive)
-  (let ((frame (selected-frame)))
-    (set-frame-parameter
-     frame 'alpha-background
-     (if (stickies--translucent-p frame) nil stickies-translucent-alpha))
     (stickies--save-frame-state frame)))
 
 (defvar-local stickies--roll-overlay nil
@@ -607,9 +588,6 @@ recursion."
                           ["Always on top" stickies-toggle-always-on-top
                            :style toggle
                            :selected (stickies--always-on-top-p)]
-                          ["Translucent" stickies-toggle-translucent
-                           :style toggle
-                           :selected (stickies--translucent-p)]
                           ["Rolled up" stickies-toggle-roll-up
                            :style toggle
                            :selected (stickies--rolled-up-p)]
@@ -739,16 +717,15 @@ the corresponding sticky note frame when the buffer is killed."
 
 (defun stickies--frame-geometry (frame)
   "Return an alist of frame parameters describing FRAME's persistent state.
-Captures geometry plus toggles like `z-group' and `alpha-background'.
+Captures geometry plus toggles like `z-group'.
 If FRAME is currently rolled up, save the pre-rolled (expanded)
 height so a restored frame doesn't come back as a tiny strip."
-  `((width            . ,(frame-parameter frame 'width))
-    (height           . ,(or (stickies--rolled-up-p frame)
-                             (frame-parameter frame 'height)))
-    (left             . ,(frame-parameter frame 'left))
-    (top              . ,(frame-parameter frame 'top))
-    (z-group          . ,(frame-parameter frame 'z-group))
-    (alpha-background . ,(frame-parameter frame 'alpha-background))))
+  `((width   . ,(frame-parameter frame 'width))
+    (height  . ,(or (stickies--rolled-up-p frame)
+                    (frame-parameter frame 'height)))
+    (left    . ,(frame-parameter frame 'left))
+    (top     . ,(frame-parameter frame 'top))
+    (z-group . ,(frame-parameter frame 'z-group))))
 
 (defun stickies--monitor-workareas (frame)
   "Return the work areas (X Y W H) of every monitor on FRAME's display."
