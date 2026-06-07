@@ -403,10 +403,17 @@ note frames are touched, so the buffer shown elsewhere stays normal."
 (defface stickies-roll-button-hover '((t :inherit mode-line-highlight))
   "Mouse hover face for the sticky note roll-up button.")
 
-(defun stickies--button-close (_event)
-  "Header-line button: close (delete) the current sticky note frame."
+(defun stickies--button-close (event)
+  "Header-line button: delete the sticky note whose button was clicked.
+A note with non-whitespace content is deleted only after confirmation;
+an empty or whitespace-only note is deleted without prompting."
   (interactive "e")
-  (delete-frame))
+  (let* ((frame (window-frame (posn-window (event-start event))))
+         (buffer (stickies--frame-buffer frame))
+         (basename (file-name-nondirectory (buffer-file-name buffer))))
+    (when (or (stickies--note-blank-p buffer)
+              (yes-or-no-p (format "Delete sticky note %s? " basename)))
+      (stickies--delete-note buffer))))
 
 (defvar stickies--close-button-map
   (let ((m (make-sparse-keymap)))
@@ -1398,25 +1405,34 @@ Only supported on graphical frames."
     (stickies--apply-colors)))
 
 ;;;###autoload
+(defun stickies--note-blank-p (buffer)
+  "Return non-nil if note BUFFER holds nothing but whitespace."
+  (with-current-buffer buffer
+    (not (string-match-p "[^[:space:]]" (buffer-string)))))
+
+(defun stickies--delete-note (buffer)
+  "Delete the sticky note shown in BUFFER: its frames, file, buffer and entry."
+  (let* ((path (buffer-file-name buffer))
+         (basename (file-name-nondirectory path)))
+    (dolist (frame (stickies--frames basename))
+      ;; Clear the marker so `stickies--on-frame-deleted' doesn't
+      ;; re-save geometry into an entry we're about to drop.
+      (set-frame-parameter frame 'stickies-note nil)
+      (ignore-errors (delete-frame frame)))
+    (with-current-buffer buffer
+      (set-buffer-modified-p nil))
+    (kill-buffer buffer)
+    (delete-file path)
+    (stickies--unregister basename)))
+
 (defun stickies-delete ()
   "Delete the current sticky note (with confirmation)."
   (interactive)
   (unless stickies-note-mode
     (user-error "Not in a sticky note buffer"))
-  (let* ((buffer (current-buffer))
-         (path buffer-file-name)
-         (basename (file-name-nondirectory path)))
+  (let ((basename (file-name-nondirectory buffer-file-name)))
     (when (yes-or-no-p (format "Delete sticky note %s? " basename))
-      (dolist (frame (stickies--frames basename))
-        ;; Clear the marker so `stickies--on-frame-deleted' doesn't
-        ;; re-save geometry into an entry we're about to drop.
-        (set-frame-parameter frame 'stickies-note nil)
-        (ignore-errors (delete-frame frame)))
-      (with-current-buffer buffer
-        (set-buffer-modified-p nil))
-      (kill-buffer buffer)
-      (delete-file path)
-      (stickies--unregister basename))))
+      (stickies--delete-note (current-buffer)))))
 
 (provide 'stickies)
 ;;; stickies.el ends here
