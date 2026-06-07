@@ -871,22 +871,6 @@ target or ATTEMPTS (default 20) is exhausted."
 
 (defvar minibuffer-prompt-properties)
 
-(defcustom stickies-minibuffer-resize t
-  "Whether a note's minibuffer frame grows to fit its content.
-When non-nil it grows downward over the note to fit the prompt and any
-completion list (so e.g. Ivy's candidates stay visible), bounded by the
-note's height.  Set to nil to keep it a single line; taller content then
-scrolls within it."
-  :type 'boolean)
-
-(defcustom stickies-minibuffer-max-lines nil
-  "Maximum height, in lines, of a note's minibuffer frame.
-nil means grow to fit the content, bounded only by the note's height --
-keeping a completion UI's current candidate visible.  An integer caps it
-further (more compact, but a long list may then be clipped)."
-  :type '(choice (const :tag "As tall as the note" nil) integer))
-
-
 (defvar stickies-minibuffer-frame-parameters
   '((minibuffer . only)
     (name . "stickies-minibuffer")
@@ -1050,16 +1034,14 @@ and it leaves a frame alone while its note is in isearch."
 (defun stickies--minibuffer-frame-target-height (frame)
   "Lines needed to show FRAME's minibuffer content.
 Bounded by the note's height (so a completion list's current candidate
-stays visible), and by `stickies-minibuffer-max-lines' if set."
+stays visible)."
   (let* ((win (frame-root-window frame))
          (char-h (frame-char-height frame))
          (pixel-h (cdr (window-text-pixel-size win nil nil nil nil)))
          (needed (max 1 (ceiling pixel-h char-h)))
          (parent (or (frame-parameter frame 'parent-frame) frame))
          (note-max (max 1 (1- (floor (frame-pixel-height parent) char-h)))))
-    (min needed (if stickies-minibuffer-max-lines
-                    (min stickies-minibuffer-max-lines note-max)
-                  note-max))))
+    (min needed note-max)))
 
 (defun stickies--resize-mini-frames (frame)
   "Resize a note minibuffer FRAME to fit its content; defer otherwise.
@@ -1070,11 +1052,10 @@ wrapping interplay can spin redisplay on macOS).  Other minibuffer
 frames keep whatever
 `resize-mini-frames' did before."
   (if (frame-parameter frame 'stickies-minibuffer)
-      (when stickies-minibuffer-resize
-        (let ((target (stickies--minibuffer-frame-target-height frame)))
-          ;; Only on a real change -- a no-op resize re-enters redisplay.
-          (unless (= target (frame-height frame))
-            (set-frame-height frame target))))
+      (let ((target (stickies--minibuffer-frame-target-height frame)))
+        ;; Only on a real change -- a no-op resize re-enters redisplay.
+        (unless (= target (frame-height frame))
+          (set-frame-height frame target)))
     (let ((prev stickies--saved-resize-mini-frames))
       (cond ((functionp prev) (funcall prev frame))
             ((and prev (not (eq prev 'unset))) (fit-frame-to-buffer frame))))))
