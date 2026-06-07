@@ -318,10 +318,15 @@ set absolutely (not relative as `face-remap' would) so the user's global
 theme cannot show through -- both fg and bg are pinned, while
 slant/weight/etc. are left alone.  Used for both a note frame and its
 minibuffer child frame, so the prompt and completions match the note."
-  ;; `default' (and the area painted below buffer text) via frame params
-  ;; rather than the face, so it survives the face cache.
+  ;; Pin the body background two ways: the frame parameter covers the area
+  ;; painted below the last line of text, and the `default' face covers the
+  ;; text background itself.  On the NS port the frame parameter does not
+  ;; propagate to the `default' face, so without the explicit face attribute
+  ;; the note body keeps the global (often dark) theme while only the chrome
+  ;; faces below pick up BG.
   (set-frame-parameter frame 'background-color bg)
   (set-frame-parameter frame 'foreground-color fg)
+  (set-face-attribute 'default frame :background bg :foreground fg)
   (set-face-attribute 'header-line frame
                       :background bg
                       :foreground fg
