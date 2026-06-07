@@ -819,6 +819,12 @@ target or ATTEMPTS (default 20) is exhausted."
     ;; hooks have run), so even the first echo message displays correctly
     ;; without waiting for the first interactive read.
     (stickies--position-minibuffer-frame mini-frame frame)
+    ;; Explicitly hide it: on the NS port a child frame is mapped along
+    ;; with its parent regardless of its `visibility' nil parameter, so
+    ;; the frame would otherwise sit over the note (with the stale
+    ;; geometry computed above, before placement is final) until the
+    ;; first echo message or read repositioned and hid it.
+    (make-frame-invisible mini-frame t)
     ;; Restored geometry may point at a now-detached monitor; pull the
     ;; frame back onto a visible screen so it stays reachable.
     (stickies--clamp-frame-onscreen frame)
