@@ -716,13 +716,18 @@ the corresponding sticky note frame when the buffer is killed."
   "Return an alist of frame parameters describing FRAME's persistent state.
 Captures geometry plus toggles like `z-group'.
 If FRAME is currently rolled up, save the pre-rolled (expanded)
-height so a restored frame doesn't come back as a tiny strip."
-  `((width   . ,(frame-parameter frame 'width))
-    (height  . ,(or (stickies--rolled-up-p frame)
-                    (frame-parameter frame 'height)))
-    (left    . ,(frame-parameter frame 'left))
-    (top     . ,(frame-parameter frame 'top))
-    (z-group . ,(frame-parameter frame 'z-group))))
+height so a restored frame doesn't come back as a tiny strip.
+Parameters that are nil are dropped: persisting e.g. a nil `left'/`top'
+(as can happen for a not-yet-positioned frame) would feed nil back to
+`make-frame', which errors on some ports (NS: \"integerp, nil\")."
+  (seq-filter
+   #'cdr
+   `((width   . ,(frame-parameter frame 'width))
+     (height  . ,(or (stickies--rolled-up-p frame)
+                     (frame-parameter frame 'height)))
+     (left    . ,(frame-parameter frame 'left))
+     (top     . ,(frame-parameter frame 'top))
+     (z-group . ,(frame-parameter frame 'z-group)))))
 
 (defun stickies--monitor-workareas (frame)
   "Return the work areas (X Y W H) of every monitor on FRAME's display."
@@ -792,7 +797,10 @@ target or ATTEMPTS (default 20) is exhausted."
   (let* ((frame-resize-pixelwise t)
          (path (stickies--note-path basename))
          (entry (stickies--register basename))
-         (saved (alist-get :params (cdr entry)))
+         ;; Drop nil-valued params: an older index may hold a nil
+         ;; `left'/`top'/`z-group', which `make-frame' rejects on the NS
+         ;; port ("integerp, nil").
+         (saved (seq-filter #'cdr (alist-get :params (cdr entry))))
          (rolled-up (alist-get :rolled-up (cdr entry)))
          ;; The note's minibuffer child frame -- created first so the note
          ;; can point its `minibuffer' parameter at its window.
