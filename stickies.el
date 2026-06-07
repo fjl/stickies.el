@@ -1146,8 +1146,12 @@ echo area is still cleared as usual."
   "Enable `stickies-note-mode' for note files under `stickies-directory'.
 Only real notes qualify; `stickies--note-basename' already rejects
 hidden, backup and auto-save files, so visiting e.g. the index file
-leaves the mode off."
-  (when (and buffer-file-name
+leaves the mode off.
+
+The mode relies on child frames and is only enabled on GUI Emacs; on a
+TTY the note file just opens normally."
+  (when (and (display-graphic-p)
+             buffer-file-name
              (stickies--note-basename buffer-file-name)
              (not stickies-note-mode))
     (stickies-note-mode 1)))
@@ -1179,7 +1183,7 @@ nested display of the note buffer) while `stickies--make-frame' runs.")
 Return the frame, or nil if BUFFER is not a note (or a frame is already
 being created).  An existing frame is raised and focused; a note with no
 live frame gets a fresh one."
-  (unless stickies--opening-frame
+  (when (and (display-graphic-p) (not stickies--opening-frame))
     (when-let ((basename (stickies--buffer-note-basename buffer)))
       (let ((frame (car (stickies--frames basename))))
         (unless frame
@@ -1221,6 +1225,13 @@ arguments, called unchanged otherwise."
 
 ;;;; Interactive commands
 
+(defun stickies--ensure-graphic ()
+  "Signal a `user-error' unless the current frame is graphical.
+Commands that manipulate note frames call this; those frames exist
+only on GUI Emacs."
+  (unless (display-graphic-p)
+    (user-error "Sticky note frames are only supported on graphical frames")))
+
 (defun stickies--next-basename ()
   "Return a fresh `note-NNN.txt' whose `note-NNN' stem is unused.
 The stem must be unique across all extensions so `note-001.txt'
@@ -1246,24 +1257,33 @@ rename it afterwards."
     (with-temp-file path)
     (setf (alist-get :theme (cdr cell)) stickies-default-theme)
     (stickies--save-index)
-    (stickies--make-frame basename)))
+    ;; The note's own frame is a GUI-only affair; on a TTY just visit
+    ;; the new file normally.
+    (if (display-graphic-p)
+        (stickies--make-frame basename)
+      (find-file path))))
 
 ;;;###autoload
 (defun stickies-open (basename)
   "Open the sticky note BASENAME from `stickies-directory'."
   (interactive
    (list (completing-read "Sticky note: " (stickies--all-notes) nil t)))
-  (let ((existing (stickies--frames basename)))
-    (if existing
-        (progn (make-frame-visible (car existing))
-               (select-frame-set-input-focus (car existing)))
-      (stickies--load-index)
-      (stickies--make-frame basename))))
+  ;; On a TTY there are no note frames; just open the file normally.
+  (if (not (display-graphic-p))
+      (find-file (stickies--note-path basename))
+    (let ((existing (stickies--frames basename)))
+      (if existing
+          (progn (make-frame-visible (car existing))
+                 (select-frame-set-input-focus (car existing)))
+        (stickies--load-index)
+        (stickies--make-frame basename)))))
 
 ;;;###autoload
 (defun stickies-show-all ()
-  "Show every sticky note in `stickies-directory'."
+  "Show every sticky note in `stickies-directory'.
+Only supported on graphical frames."
   (interactive)
+  (stickies--ensure-graphic)
   (stickies--load-index)
   (dolist (basename (stickies--all-notes))
     (let ((frames (stickies--frames basename)))
@@ -1273,8 +1293,10 @@ rename it afterwards."
 
 ;;;###autoload
 (defun stickies-hide-all ()
-  "Hide every visible sticky note frame."
+  "Hide every visible sticky note frame.
+Only supported on graphical frames."
   (interactive)
+  (stickies--ensure-graphic)
   (dolist (frame (stickies--frames))
     (stickies--save-frame-state frame)
     (make-frame-invisible frame t)))
@@ -1287,8 +1309,11 @@ Otherwise show every sticky note in `stickies-directory' and raise the
 frames.  Dispatching on the current frame instead of overall
 visibility means one invocation from a non-sticky note frame always
 brings the sticky notes forward, even when some are merely occluded
-by other windows -- something Emacs has no API to detect."
+by other windows -- something Emacs has no API to detect.
+
+Only supported on graphical frames."
   (interactive)
+  (stickies--ensure-graphic)
   (if (frame-parameter (selected-frame) 'stickies-note)
       (stickies-hide-all)
     (stickies--load-index)
