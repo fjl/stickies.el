@@ -137,21 +137,6 @@ A value below 1.0 makes them smaller than the note body; nil leaves them
 at the body's size."
   :type '(choice (const :tag "Same as body" nil) number))
 
-(defvar stickies-frame-parameters
-  '((width . 40)
-    (height . 12)
-    (undecorated . t)
-    (drag-with-header-line . t)
-    (unsplittable . t)
-    (vertical-scroll-bars . nil)
-    (internal-border-width . 0)
-    (menu-bar-lines . 0)
-    (tool-bar-lines . 0))
-  "Default frame parameters for sticky note frames.
-A `(stickies-note . BASENAME)' marker and a `minibuffer' pointing at the
-note's minibuffer child frame are added automatically (see
-`stickies--make-frame').  Saved per-note geometry overrides these.")
-
 (defcustom stickies-auto-save-interval 2
   "Idle seconds before a modified sticky note is auto-saved.
 Set to nil to disable auto-saving."
@@ -819,78 +804,67 @@ target or ATTEMPTS (default 20) is exhausted."
         (run-with-timer 0.05 nil
                         #'stickies--roll-up-on-open frame (1- attempts))))))
 
+(defvar stickies--frame-parameters
+  '((width . 40)
+    (height . 12)
+    (undecorated . t)
+    (drag-with-header-line . t)
+    (unsplittable . t)
+    (vertical-scroll-bars . nil)
+    (internal-border-width . 0)
+    (menu-bar-lines . 0)
+    (tool-bar-lines . 0))
+  "Default frame parameters for sticky note frames.
+A `(stickies-note . BASENAME)' marker and a `minibuffer' pointing at the
+note's minibuffer child frame are added automatically (see
+`stickies--make-frame').  Saved per-note geometry overrides these.")
+
 (defun stickies--make-frame (basename)
   "Create and return a frame displaying the sticky note BASENAME."
-  ;; Let-bind across `make-frame': X size hints (width_inc/height_inc)
-  ;; sent to the WM at frame creation depend on this variable, and the
-  ;; WM uses them to round later resize requests.  Without pixel-precise
-  ;; hints, our rolled-up resize would get rounded up to a whole
-  ;; character row -- two text lines instead of just the header.
-  (let* ((frame-resize-pixelwise t)
-         (path (stickies--note-path basename))
-         (entry (stickies--register basename))
-         ;; Drop nil-valued params: an older index may hold a nil
-         ;; `left'/`top'/`z-group', which `make-frame' rejects on the NS
-         ;; port ("integerp, nil").
-         (saved (seq-filter #'cdr (alist-get :params (cdr entry))))
-         (rolled-up (alist-get :rolled-up (cdr entry)))
-         ;; The note's minibuffer child frame -- created first so the note
-         ;; can point its `minibuffer' parameter at its window.
-         (mini-frame (stickies--make-minibuffer-frame))
-         ;; Order: per-note geometry first, then user defaults, then
-         ;; required markers last (so they always win).  Created hidden
-         ;; (`visibility' nil): the note and its minibuffer child frame must
-         ;; be fully linked, themed and positioned BEFORE they first render.
-         ;; Otherwise -- the note frame being visible from birth -- the NS
-         ;; port maps the child frame (which shares the note's minibuffer)
-         ;; with the still-default config, and a message arriving in that
-         ;; window shows oversized in the unscaled (1.0) font until the next
-         ;; message's resize corrects it.
-         (params (append `((stickies-note . ,basename)
-                           (name . ,(format "Sticky note: %s" basename))
-                           (minibuffer . ,(minibuffer-window mini-frame))
-                           (visibility . nil))
-                         saved
-                         stickies-frame-parameters))
-         (buffer (find-file-noselect path))
-         (frame  (make-frame params))
-         (window (frame-root-window frame)))
-    (set-window-buffer window buffer)
-    (set-window-dedicated-p window t)
-    ;; Cross-link the note and its minibuffer frame, and make the latter a
-    ;; child of the note.
-    (set-frame-parameter frame 'stickies-minibuffer-frame mini-frame)
-    (set-frame-parameter mini-frame 'stickies-minibuffer frame)
-    (set-frame-parameter mini-frame 'parent-frame frame)
-    (stickies--apply-frame-colors frame)
-    ;; Position (and scale the font of) the minibuffer frame while the note
-    ;; is still hidden, so it is fully configured before its first render.
-    (stickies--position-minibuffer-frame mini-frame frame)
-    ;; Reveal the fully-configured note.  On the NS port its child minibuffer
-    ;; frame is mapped along with it regardless of its own `visibility' nil,
-    ;; so hide it again afterwards -- it realizes with the correct config and
-    ;; then stays down until the first echo message or read shows it.
-    (make-frame-visible frame)
-    (make-frame-invisible mini-frame t)
-    ;; Restored geometry may point at a now-detached monitor; pull the
-    ;; frame back onto a visible screen so it stays reachable.  Done
-    ;; synchronously: a deferred clamp fires during the NS port's async
-    ;; frame realization and repaints the body with the system appearance
-    ;; (`ns-appearance'), losing the theme background.  The show paths
-    ;; (`stickies-toggle' etc.) clamp again once the frame is placed, which
-    ;; covers the off-screen-recovery case.
-    (stickies--clamp-frame-onscreen frame)
-    (when rolled-up
-      ;; Defer the roll-up: a synchronous resize inside `make-frame'
-      ;; lands before the WM has finished sizing the new frame and gets
-      ;; rounded up to two character rows.  `stickies--roll-up-on-open'
-      ;; keeps re-applying the rolled-up height until the WM honors the
-      ;; pixel-precise request.
-      (run-with-timer 0 nil #'stickies--roll-up-on-open frame))
-    ;; Mark the frame fully built so size-change handlers may act on it
-    ;; (see `stickies--constrain-size-on-resize').
-    (set-frame-parameter frame 'stickies-ready t)
-    frame))
+  (let ((frame-resize-pixelwise t))
+    (let* ((path (stickies--note-path basename))
+           (entry (stickies--register basename))
+           (saved-params (seq-filter #'cdr (alist-get :params (cdr entry))))
+           (rolled-up (alist-get :rolled-up (cdr entry)))
+           ;; The note's minibuffer child frame -- created first so the note
+           ;; can point its `minibuffer' parameter at its window.
+           (mini-frame (stickies--make-minibuffer-frame))
+           ;; Order: per-note geometry first, then user defaults, then
+           ;; required markers last (so they always win).
+           (params (append `((stickies-note . ,basename)
+                             (name . ,(format "Sticky note: %s" basename))
+                             (minibuffer . ,(minibuffer-window mini-frame))
+                             (visibility . nil))
+                           saved-params
+                           stickies--frame-parameters))
+           (buffer (find-file-noselect path))
+           (frame  (make-frame params))
+           (window (frame-root-window frame)))
+      (set-window-buffer window buffer)
+      (set-window-dedicated-p window t)
+      ;; Cross-link the note and its minibuffer frame, and make the latter a
+      ;; child of the note.
+      (set-frame-parameter frame 'stickies-minibuffer-frame mini-frame)
+      (set-frame-parameter mini-frame 'stickies-minibuffer frame)
+      (set-frame-parameter mini-frame 'parent-frame frame)
+      (stickies--apply-frame-colors frame)
+      ;; Position (and scale the font of) the minibuffer frame while the note
+      ;; is still hidden, so it is fully configured before its first render.
+      (stickies--position-minibuffer-frame mini-frame frame)
+      ;; Reveal the fully-configured note.
+      (make-frame-visible frame)
+      ;; Force the minibuffer frame invisible, it gets mapped sometimes.
+      (make-frame-invisible mini-frame t)
+      ;; Restored geometry may point at a now-detached monitor; pull the
+      ;; frame back onto a visible screen so it stays reachable.
+      (stickies--clamp-frame-onscreen frame)
+      (when rolled-up
+        ;; Apply roll-up asynchronously.
+        (run-with-timer 0 nil #'stickies--roll-up-on-open frame))
+      ;; Mark the frame fully built so size-change handlers may act on it
+      ;; (see `stickies--constrain-size-on-resize').
+      (set-frame-parameter frame 'stickies-ready t)
+      frame)))
 
 (defun stickies--save-frame-state (frame)
   "Persist FRAME's geometry and rolled-up state into the index."
@@ -926,7 +900,7 @@ target or ATTEMPTS (default 20) is exhausted."
 
 (defvar minibuffer-prompt-properties)
 
-(defvar stickies-minibuffer-frame-parameters
+(defvar stickies--minibuffer-frame-parameters
   '((minibuffer . only)
     (name . "stickies-minibuffer")
     (undecorated . t)
@@ -937,7 +911,7 @@ target or ATTEMPTS (default 20) is exhausted."
     (horizontal-scroll-bars . nil)
     (menu-bar-lines . 0)
     (tool-bar-lines . 0)
-    (child-frame-border-width . 0)
+    (child-frame-border-width . 1)
     (internal-border-width . 0)
     (desktop-dont-save . t)
     (no-other-frame . t)
@@ -954,7 +928,7 @@ makes it a free-floating draggable panel on macOS.")
 (defun stickies--make-minibuffer-frame ()
   "Create and return a hidden minibuffer-only child frame for a note."
   (let ((after-make-frame-functions nil))
-    (make-frame stickies-minibuffer-frame-parameters)))
+    (make-frame stickies--minibuffer-frame-parameters)))
 
 (defun stickies--minibuffer-frame-of (frame)
   "Return the live minibuffer child frame for sticky note FRAME, or nil."
@@ -989,9 +963,7 @@ header line, with a matching line height for an exact line count."
 
 (defun stickies--position-minibuffer-frame (mini note)
   "Position and theme MINI over NOTE's content area (without showing it).
-Idempotent, so it can run on every echo display to undo a config that
-re-applies frame parameters (e.g. a thick `child-frame-border-width') to
-all frames behind our back."
+This runs on every echo display."
   (when (and (frame-live-p mini) (frame-live-p note))
     (pcase-let* ((`(,bg ,fg ,border)
                   (with-current-buffer (stickies--frame-buffer note)
