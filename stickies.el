@@ -509,7 +509,11 @@ without changing the frame's height in lines."
         (frame-resize-pixelwise t))
     (set-frame-height frame (1+ (frame-char-height frame)) nil t))
   (set-frame-parameter frame 'stickies-roll-height
-                       (frame-text-height frame)))
+                       (frame-text-height frame))
+  ;; Record the rolled text width; the resize hook restores it (height is
+  ;; pinned via `stickies-roll-height', position via `stickies-roll-anchor').
+  (set-frame-parameter frame 'stickies-roll-width
+                       (frame-text-width frame)))
 
 (defun stickies-toggle-roll-up ()
   "Toggle whether the current sticky note frame is rolled up.
@@ -525,6 +529,8 @@ resize it vertically are undone, while width changes are kept."
         (progn
           (set-frame-parameter frame 'stickies-roll-saved-height nil)
           (set-frame-parameter frame 'stickies-roll-height nil)
+          (set-frame-parameter frame 'stickies-roll-width nil)
+          (set-frame-parameter frame 'stickies-roll-anchor nil)
           (with-current-buffer (stickies--frame-buffer frame)
             (stickies--exit-rolled-up))
           (set-frame-height frame saved))
@@ -540,39 +546,109 @@ resize it vertically are undone, while width changes are kept."
   "Minimum size (WIDTH . HEIGHT), in characters, of a sticky note frame.
 Without this a note can be dragged down to an unusable sliver, as
 undecorated frames don't get a minimum size enforced by the window
-manager.  The height floor is skipped while a note is rolled up, which
-has its own fixed height.")
+manager.  The floors are skipped while a note is rolled up, which has its
+own fixed geometry.")
+
+;;;; Rolled-up note resizing guard
+
+(defvar stickies--restoring-roll nil
+  "Non-nil while `stickies--restore-rolled-geometry' rewrites a frame.
+Suppresses the size-change and move handlers it re-triggers, so they
+don't schedule another restore on top of the one in progress.")
+
+(defvar stickies--roll-resizing nil
+  "Frame currently being resized while rolled up, else nil.
+Lets `stickies--constrain-size-on-resize' recognise the first event of a
+drag -- when it snapshots the note's resting position -- and tell it from
+the events that follow.")
+
+(defvar stickies--roll-resizing-timer nil
+  "Idle timer that clears `stickies--roll-resizing' after a drag settles.")
+
+(defun stickies--note-roll-resize (frame)
+  "Mark FRAME as mid-resize, clearing the mark shortly after motion stops."
+  (setq stickies--roll-resizing frame)
+  (when (timerp stickies--roll-resizing-timer)
+    (cancel-timer stickies--roll-resizing-timer))
+  (setq stickies--roll-resizing-timer
+        (run-with-idle-timer 0.15 nil
+                             (lambda () (setq stickies--roll-resizing nil)))))
+
+(defun stickies--rolled-geometry-disturbed-p (frame)
+  "Return non-nil if rolled-up FRAME's size no longer matches the rolled one.
+Compares text width against `stickies-roll-width' and text height against
+`stickies-roll-height'.  Position is ignored: only the size is held fixed,
+the note is free to be moved."
+  (when-let ((w (frame-parameter frame 'stickies-roll-width)))
+    (not (and (equal (frame-text-width frame) w)
+              (equal (frame-text-height frame)
+                     (frame-parameter frame 'stickies-roll-height))))))
+
+(defun stickies--restore-rolled-geometry (frame)
+  "Re-impose rolled-up FRAME's fixed size and its current drag anchor.
+A rolled-up note is a fixed-size \"titlebar\".  The NS port hardcodes
+undecorated frames as resizable (`NSWindowStyleMaskResizable' in nsterm.m,
+with no Lisp parameter to disable it), so the corner is always an OS
+resize handle and we can't stop the drag; we slam the rolled size back on
+every resize event, pinning the size for the duration of the drag.
+
+The position must be re-imposed each event too: relying on
+`set-frame-width'/`-height' to keep the top-left lets the frame drift
+against AppKit's live resize until it flies off-screen.  We pin it to
+`stickies-roll-anchor' -- a snapshot of where the note sat when *this*
+drag began (taken in `stickies--constrain-size-on-resize').  Because that
+anchor is read fresh per drag, never a long-lived stored position, it
+stops the drift without ever snapping the note back to a stale spot."
+  (when (and (frame-live-p frame) (stickies--rolled-up-p frame))
+    (when-let ((w (frame-parameter frame 'stickies-roll-width))
+               (a (frame-parameter frame 'stickies-roll-anchor)))
+      (let ((stickies--restoring-roll t)
+            (window-min-height 0)
+            (window-safe-min-height 0)
+            (frame-resize-pixelwise t))
+        (set-frame-width frame w nil t)
+        (set-frame-height frame (1+ (frame-char-height frame)) nil t)
+        (set-frame-position frame (car a) (cdr a))))))
 
 (defun stickies--constrain-size-on-resize (frame)
   "Hold sticky note FRAME within its size constraints after a resize.
-The width is always floored at `stickies-min-size'.  A rolled-up note has
-a fixed height, reverted to `stickies-roll-height'; otherwise the height
-is floored at `stickies-min-size' too.  Setting the size re-enters this
-hook, but the size then satisfies the constraint so the guard stops the
-recursion.
+While rolled up the note is a fixed-size titlebar: a resize is undone by
+re-imposing the rolled size and the drag anchor
+\(`stickies--restore-rolled-geometry'), so it stays put throughout a corner
+drag.  On the first event of a drag -- when no resize is yet in progress --
+the note's current top-left is snapshot into `stickies-roll-anchor', and
+the note is pinned there for the rest of the drag.  Reading the live
+position fresh each drag means a note moved beforehand keeps where the
+user left it, with no stale stored position to teleport back to.
+
+When expanded, width and height are floored at `stickies-min-size'.
+Either way, setting the size/position re-enters this hook, but the result
+then satisfies the guard so the recursion stops (and the rolled-up restore
+additionally binds `stickies--restoring-roll').
 
 Skipped until the frame is fully built (`stickies-ready'): resizing a
 frame mid-realization repaints the NS body with the system appearance,
 losing the theme background."
   (when (and (frame-parameter frame 'stickies-note)
-             (frame-parameter frame 'stickies-ready))
-    (when (< (frame-width frame) (car stickies-min-size))
-      (set-frame-width frame (car stickies-min-size)))
+             (frame-parameter frame 'stickies-ready)
+             (not stickies--restoring-roll))
     (if (stickies--rolled-up-p frame)
-        (unless (equal (frame-text-height frame)
-                       (frame-parameter frame 'stickies-roll-height))
-          (stickies--apply-roll-height frame))
+        (when (stickies--rolled-geometry-disturbed-p frame)
+          (unless (eq stickies--roll-resizing frame)
+            ;; Drag just started: remember where the note currently sits.
+            (pcase-let ((`(,l ,tp ,_ ,_) (frame-edges frame 'outer-edges)))
+              (set-frame-parameter frame 'stickies-roll-anchor (cons l tp))))
+          (stickies--note-roll-resize frame)
+          (stickies--restore-rolled-geometry frame))
+      (when (< (frame-width frame) (car stickies-min-size))
+        (set-frame-width frame (car stickies-min-size)))
       (when (< (frame-height frame) (cdr stickies-min-size))
         (set-frame-height frame (cdr stickies-min-size))))))
 
 (add-hook 'window-size-change-functions #'stickies--constrain-size-on-resize)
 
-(defun stickies--save-all-frame-state ()
-  "Persist geometry of every visible sticky note frame."
-  (dolist (frame (stickies--frames))
-    (stickies--save-frame-state frame)))
 
-(add-hook 'kill-emacs-hook #'stickies--save-all-frame-state)
+;;;; Contex Menu
 
 (defun stickies--popup-menu (event)
   "Show the sticky note context menu at EVENT location."
@@ -670,6 +746,13 @@ Writes the index file at most once even when several frames are dirty."
     (setq stickies--auto-save-timer
           (run-with-idle-timer stickies-auto-save-interval t
                                #'stickies--auto-save-tick))))
+
+(defun stickies--save-all-frame-state ()
+  "Persist geometry of every visible sticky note frame."
+  (dolist (frame (stickies--frames))
+    (stickies--save-frame-state frame)))
+
+(add-hook 'kill-emacs-hook #'stickies--save-all-frame-state)
 
 
 ;;;; Text scale
