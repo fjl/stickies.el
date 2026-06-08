@@ -811,7 +811,7 @@ target or ATTEMPTS (default 20) is exhausted."
     (drag-with-header-line . t)
     (unsplittable . t)
     (vertical-scroll-bars . nil)
-    (internal-border-width . 0)
+    (internal-border-width . 1)
     (menu-bar-lines . 0)
     (tool-bar-lines . 0))
   "Default frame parameters for sticky note frames.
