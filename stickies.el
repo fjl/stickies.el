@@ -4,7 +4,7 @@
 
 ;; Author: Felix Lange <fjl@twurst.com>
 ;; Maintainer: Felix Lange <fjl@twurst.com>
-;; Version: 0.1.1
+;; Version: 0.1.2
 ;; Package-Requires: ((emacs "29.1"))
 ;; Keywords: convenience
 ;; URL: https://github.com/fjl/stickies.el
