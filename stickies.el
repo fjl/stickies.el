@@ -977,13 +977,13 @@ note's minibuffer child frame are added automatically (see
       ;; Position (and scale the font of) the minibuffer frame while the note
       ;; is still hidden, so it is fully configured before its first render.
       (stickies--position-minibuffer-frame mini-frame frame)
+      ;; Restored geometry may point at a now-detached monitor; pull the
+      ;; frame back onto a visible screen so it stays reachable.
+      (stickies--clamp-frame-onscreen frame)
       ;; Reveal the fully-configured note.
       (make-frame-visible frame)
       ;; Force the minibuffer frame invisible, it gets mapped sometimes.
       (make-frame-invisible mini-frame t)
-      ;; Restored geometry may point at a now-detached monitor; pull the
-      ;; frame back onto a visible screen so it stays reachable.
-      (stickies--clamp-frame-onscreen frame)
       (when rolled-up
         ;; Apply roll-up asynchronously.
         (run-with-timer 0 nil #'stickies--roll-up-on-open frame))
