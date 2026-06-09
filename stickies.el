@@ -967,7 +967,7 @@ target or ATTEMPTS (default 20) is exhausted."
     (drag-internal-border . t)
     (unsplittable . t)
     (vertical-scroll-bars . nil)
-    (internal-border-width . 1)
+    (internal-border-width . 3)
     (menu-bar-lines . 0)
     (tool-bar-lines . 0)
     (tab-bar-lines . 0))
