@@ -570,7 +570,13 @@ resize it vertically are undone, while width changes are kept."
                            :selected (stickies--rolled-up-p)]
                           "--"
                           ["Close note" delete-frame])))))
-    (popup-menu menu event)))
+    ;; While the menu is open the command loop is in the middle of a key-sequence; after
+    ;; `echo-keystrokes' seconds it echoes the in-progress keys. For a mouse-driven menu
+    ;; that echo is effectively blank, but it still shows the minibuffer frame. Disabling
+    ;; echo-keystrokes and rebinding show-help-function avoids this.
+    (let ((echo-keystrokes 0)
+          (show-help-function #'ignore))
+      (popup-menu menu event))))
 
 (defvar stickies-note-mode-map
   (let ((m (make-sparse-keymap)))
