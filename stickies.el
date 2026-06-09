@@ -647,6 +647,34 @@ losing the theme background."
 
 (add-hook 'window-size-change-functions #'stickies--constrain-size-on-resize)
 
+(defun stickies--resync-frame-position (&rest _)
+  "Correct a note frame's cached origin from the mouse before a header drag.
+On the NS port an OS resize moves the window origin without firing
+`windowDidMove', so Emacs's cached `frame-position' goes stale (there is no
+`windowDidResize' handler updating it).  `mouse-drag-frame-move' seeds its
+drag from that cache, so the first motion snaps the note back by the
+resize amount.
+
+The true origin is recoverable without the cache: the screen mouse
+position (`mouse-absolute-pixel-position') minus the frame-relative mouse
+position (`mouse-pixel-position') is the frame's real screen origin.  We
+set it -- the window doesn't move (it is already there), it just refreshes
+the cache -- so the ensuing drag starts from the right place.
+
+Advises `mouse-drag-frame-move'; a no-op for non-note frames."
+  (let* ((rel (mouse-pixel-position))
+         (frame (car rel)))
+    (when (and (framep frame)
+               (frame-parameter frame 'stickies-note)
+               (display-graphic-p frame))
+      (let ((abs (mouse-absolute-pixel-position))
+            (rx (cadr rel))
+            (ry (cddr rel)))
+        (when (and (integerp rx) (integerp ry))
+          (set-frame-position frame (- (car abs) rx) (- (cdr abs) ry)))))))
+
+(advice-add 'mouse-drag-frame-move :before #'stickies--resync-frame-position)
+
 
 ;;;; Contex Menu
 
