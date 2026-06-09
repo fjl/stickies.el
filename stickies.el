@@ -532,15 +532,15 @@ without changing the frame's height in lines."
   (set-frame-parameter frame 'stickies-roll-width
                        (frame-text-width frame)))
 
-(defun stickies-toggle-roll-up ()
-  "Toggle whether the current sticky note frame is rolled up.
+(defun stickies-toggle-roll-up (&optional frame)
+  "Toggle whether sticky note FRAME (default: the selected frame) is rolled up.
 When rolled up the body shrinks to one natural row -- the
 smallest size at which Emacs reliably keeps the header line
 visible, so `drag-with-header-line' continues to move the frame
 natively.  A rolled-up frame has a fixed height: attempts to
 resize it vertically are undone, while width changes are kept."
   (interactive)
-  (let ((frame (selected-frame)))
+  (let ((frame (or frame (selected-frame))))
     (if-let ((saved (stickies--rolled-up-p frame)))
         ;; Expand.
         (progn
@@ -926,10 +926,9 @@ height on short timers until the achieved text height reaches the
 target or ATTEMPTS (default 20) is exhausted."
   (let ((attempts (or attempts 20)))
     (when (frame-live-p frame)
-      (with-selected-frame frame
-        (if (stickies--rolled-up-p frame)
-            (stickies--apply-roll-height frame)
-          (stickies-toggle-roll-up)))
+      (if (stickies--rolled-up-p frame)
+          (stickies--apply-roll-height frame)
+        (stickies-toggle-roll-up frame))
       (when (and (> attempts 0)
                  (> (frame-text-height frame)
                     (1+ (frame-char-height frame))))
