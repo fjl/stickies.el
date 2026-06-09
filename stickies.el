@@ -1354,6 +1354,13 @@ nested display of the note buffer) while `stickies--make-frame' runs.")
     (when-let ((file (buffer-file-name buffer)))
       (stickies--note-basename file))))
 
+(defun stickies--mru-note-frame ()
+  "Return the most recently used, not rolled-up sticky note frame, or nil."
+  (cl-loop for buffer in (buffer-list)
+           for basename = (stickies--buffer-note-basename buffer)
+           for frame = (and basename (car (stickies--frames basename)))
+           when (and frame (not (stickies--rolled-up-p frame))) return frame))
+
 (defun stickies--show-note-frame (buffer)
   "Reveal sticky note BUFFER in its own frame, creating the frame if needed.
 Return the frame, or nil if BUFFER is not a note (or a frame is already
@@ -1511,7 +1518,10 @@ Only supported on graphical frames."
               (make-frame-visible f)
               (stickies--clamp-frame-onscreen f)
               (raise-frame f))
-          (raise-frame (stickies--make-frame basename)))))))
+          (raise-frame (stickies--make-frame basename)))))
+    ;; Land focus on the most recently used note.
+    (when-let ((frame (stickies--mru-note-frame)))
+      (select-frame-set-input-focus frame))))
 
 ;;;###autoload
 (defun stickies-set-theme (name)
