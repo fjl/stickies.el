@@ -1164,10 +1164,7 @@ are read in the note rather than the minibuffer)."
     (stickies--position-minibuffer-frame mini note)
     (make-frame-visible mini)
     (unless no-focus
-      (redirect-frame-focus note mini)
-      (when (eq (window-system mini) 'ns)
-        ;; NS port requires this workaround to get key focus on the minibuffer frame.
-        (select-frame-set-input-focus mini)))))
+      (select-frame-set-input-focus mini))))
 
 (defun stickies--minibuffer-setup ()
   "Show a note's minibuffer frame over it during a minibuffer read.
