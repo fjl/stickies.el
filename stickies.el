@@ -542,14 +542,52 @@ resize it vertically are undone, while width changes are kept."
       (stickies--apply-roll-height frame))
     (stickies--save-frame-state frame)))
 
+(defun stickies--popup-menu (event)
+  "Show the sticky note context menu at EVENT location."
+  (interactive "e")
+  (let* ((current (stickies--current-theme))
+         (theme-items
+          (mapcar (lambda (entry)
+                    (let ((name (car entry)))
+                      `[,(capitalize (symbol-name name))
+                        (stickies--set-theme ',name)
+                        :style radio
+                        :selected ,(eq name current)]))
+                  stickies-themes))
+         (menu (easy-menu-create-menu
+                "Sticky note"
+                (append '(["New Note" stickies-new]
+                          ["Rename..." stickies-rename]
+                          ["Delete..." stickies-delete]
+                          "--")
+                        theme-items
+                        '("--"
+                          ["Always on top" stickies-toggle-always-on-top
+                           :style toggle
+                           :selected (stickies--always-on-top-p)]
+                          ["Rolled up" stickies-toggle-roll-up
+                           :style toggle
+                           :selected (stickies--rolled-up-p)]
+                          "--"
+                          ["Close note" delete-frame])))))
+    (popup-menu menu event)))
+
+(defvar stickies-note-mode-map
+  (let ((m (make-sparse-keymap)))
+    (define-key m [mouse-3] #'stickies--popup-menu)
+    (define-key m [header-line mouse-3] #'stickies--popup-menu)
+    m)
+  "Keymap for `stickies-note-mode'.")
+
+
+;;;; Rolled-up note resizing guard
+
 (defvar stickies-min-size '(15 . 3)
   "Minimum size (WIDTH . HEIGHT), in characters, of a sticky note frame.
 Without this a note can be dragged down to an unusable sliver, as
 undecorated frames don't get a minimum size enforced by the window
 manager.  The floors are skipped while a note is rolled up, which has its
 own fixed geometry.")
-
-;;;; Rolled-up note resizing guard
 
 (defvar stickies--restoring-roll nil
   "Non-nil while `stickies--restore-rolled-geometry' rewrites a frame.
@@ -674,46 +712,6 @@ Advises `mouse-drag-frame-move'; a no-op for non-note frames."
           (set-frame-position frame (- (car abs) rx) (- (cdr abs) ry)))))))
 
 (advice-add 'mouse-drag-frame-move :before #'stickies--resync-frame-position)
-
-
-;;;; Contex Menu
-
-(defun stickies--popup-menu (event)
-  "Show the sticky note context menu at EVENT location."
-  (interactive "e")
-  (let* ((current (stickies--current-theme))
-         (theme-items
-          (mapcar (lambda (entry)
-                    (let ((name (car entry)))
-                      `[,(capitalize (symbol-name name))
-                        (stickies--set-theme ',name)
-                        :style radio
-                        :selected ,(eq name current)]))
-                  stickies-themes))
-         (menu (easy-menu-create-menu
-                "Sticky note"
-                (append '(["New Note" stickies-new]
-                          ["Rename..." stickies-rename]
-                          ["Delete..." stickies-delete]
-                          "--")
-                        theme-items
-                        '("--"
-                          ["Always on top" stickies-toggle-always-on-top
-                           :style toggle
-                           :selected (stickies--always-on-top-p)]
-                          ["Rolled up" stickies-toggle-roll-up
-                           :style toggle
-                           :selected (stickies--rolled-up-p)]
-                          "--"
-                          ["Close note" delete-frame])))))
-    (popup-menu menu event)))
-
-(defvar stickies-note-mode-map
-  (let ((m (make-sparse-keymap)))
-    (define-key m [mouse-3] #'stickies--popup-menu)
-    (define-key m [header-line mouse-3] #'stickies--popup-menu)
-    m)
-  "Keymap for `stickies-note-mode'.")
 
 
 ;;;; Auto-save
