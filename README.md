@@ -36,3 +36,34 @@ keys. Since stickies is GUI-only anyway, you can use super-keys:
 (keymap-global-set "s--" 'stickies-new)
 (keymap-global-set "s-+" 'stickies-toggle)
 ```
+
+## Hooks
+
+Two separate hooks are provided for configuring sticky notes.
+
+### stickies-mode-hook
+
+This runs whenever a note buffer is set up. Use it to tweak appearance or behavior of
+every note (fonts, modes, local variables). Here is an example:
+
+```elisp
+(defun my-stickies-mode-hook ()
+  (variable-pitch-mode 1)
+  (visual-line-mode 1))
+
+(add-hook 'stickies-mode-hook 'my-stickies-mode-hook)
+```
+
+### stickies-new-note-hook
+
+This runs once after a new note is created. You can use it to insert a template. It's also
+the place to enable `enriched-mode`, should you choose to use it, since enabling it for
+the first time will write an invisible preamble into the buffer.
+
+```elisp
+(defun my-stickies-new-note-setup ()
+  (use-hard-newlines 0 'always)
+  (enriched-mode 1))
+
+(add-hook 'stickies-new-note-hook 'my-stickies-new-note-setup)
+```
