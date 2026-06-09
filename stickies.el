@@ -915,9 +915,17 @@ target or ATTEMPTS (default 20) is exhausted."
         (run-with-timer 0.05 nil
                         #'stickies--roll-up-on-open frame (1- attempts))))))
 
+;; Only bound on the NS port; declared so the `let' binding in
+;; `stickies--make-frame' is dynamic and the byte-compiler stays quiet.
+(defvar ns-use-native-fullscreen)
+
 (defvar stickies--frame-parameters
   '((width . 40)
     (height . 12)
+    ;; A note always opens at the size above, never fullscreen/maximized --
+    ;; pin these explicitly so a `fullscreen' or size entry in the user's
+    ;; `default-frame-alist' cannot leak into a note frame.
+    (fullscreen . nil)
     (undecorated . t)
     (drag-with-header-line . t)
     (unsplittable . t)
@@ -932,7 +940,14 @@ note's minibuffer child frame are added automatically (see
 
 (defun stickies--make-frame (basename)
   "Create and return a frame displaying the sticky note BASENAME."
-  (let ((frame-resize-pixelwise t))
+  ;; On the NS port a top-level frame gets the FullScreenPrimary collection
+  ;; behavior, so creating one while another frame occupies a native
+  ;; fullscreen Space makes macOS pull the new note into that Space and turn
+  ;; it fullscreen too.  Binding this to nil for the extent of `make-frame'
+  ;; drops that behavior (the value is only read while the window is built),
+  ;; keeping the note a normal-space window.
+  (let ((ns-use-native-fullscreen nil)
+        (frame-resize-pixelwise t))
     (let* ((path (stickies--note-path basename))
            (entry (stickies--register basename))
            (saved-params (seq-filter #'cdr (alist-get :params (cdr entry))))
