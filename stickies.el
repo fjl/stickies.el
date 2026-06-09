@@ -960,6 +960,7 @@ target or ATTEMPTS (default 20) is exhausted."
     ;; `default-frame-alist' cannot leak into a note frame.
     (fullscreen . nil)
     (undecorated . t)
+    (skip-taskbar . t)
     (drag-with-header-line . t)
     (unsplittable . t)
     (vertical-scroll-bars . nil)
