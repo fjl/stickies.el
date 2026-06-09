@@ -51,6 +51,13 @@ Every non-hidden file in this directory is treated as a sticky note.
 The per-note metadata index lives here too, in a hidden file."
   :type 'directory)
 
+(defcustom stickies-default-extension "txt"
+  "File extension (without the leading dot) for new sticky notes.
+The extension determines the major mode of new notes via
+`auto-mode-alist'; for example \"org\" creates `.org' notes that
+open in `org-mode'."
+  :type 'string)
+
 (defcustom stickies-themes
   '((yellow :background "#fff8b8" :foreground "#222222" :border "#cdb94f")
     (pink   :background "#fcc9c9" :foreground "#222222" :border "#d68a8a")
@@ -1421,14 +1428,15 @@ only on GUI Emacs."
     (user-error "Sticky note frames are only supported on graphical frames")))
 
 (defun stickies--next-basename ()
-  "Return a fresh `note-NNN.txt' whose `note-NNN' stem is unused.
-The stem must be unique across all extensions so `note-001.txt'
-isn't picked when `note-001.org' already exists."
+  "Return a fresh `note-NNN.EXT' whose `note-NNN' stem is unused.
+EXT is `stickies-default-extension'.  The stem must be unique across
+all extensions so `note-001.txt' isn't picked when `note-001.org'
+already exists."
   (let ((used (mapcar #'file-name-sans-extension (stickies--all-notes)))
         (n 1))
     (while (member (format "note-%03d" n) used)
       (cl-incf n))
-    (format "note-%03d.txt" n)))
+    (format "note-%03d.%s" n stickies-default-extension)))
 
 ;;;###autoload
 (defun stickies-new ()
