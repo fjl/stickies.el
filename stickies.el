@@ -595,12 +595,12 @@ resize it vertically are undone, while width changes are kept."
           (show-help-function #'ignore))
       (popup-menu menu event))))
 
-(defvar stickies-note-mode-map
+(defvar stickies-mode-map
   (let ((m (make-sparse-keymap)))
     (define-key m [mouse-3] #'stickies--popup-menu)
     (define-key m [header-line mouse-3] #'stickies--popup-menu)
     m)
-  "Keymap for `stickies-note-mode'.")
+  "Keymap for `stickies-mode'.")
 
 
 ;;;; Rolled-up note resizing guard
@@ -739,7 +739,7 @@ Advises `mouse-drag-frame-move'; a no-op for non-note frames."
 
 ;;;; Auto-save
 
-(defvar stickies-note-mode)             ; defined below via `define-minor-mode'
+(defvar stickies-mode)             ; defined below via `define-minor-mode'
 
 (defvar stickies--auto-save-timer nil
   "Idle timer that saves modified sticky note buffers.")
@@ -751,7 +751,7 @@ no dedicated hook) get persisted within one tick interval without
 writing the index on every pixel of drag."
   (dolist (buf (buffer-list))
     (with-current-buffer buf
-      (when (and stickies-note-mode
+      (when (and stickies-mode
                  buffer-file-name
                  (buffer-modified-p))
         (let ((save-silently t))
@@ -819,15 +819,15 @@ The amount is read from the buffer's index entry (see
 ;;;; Minor mode
 
 ;;;###autoload
-(define-minor-mode stickies-note-mode
+(define-minor-mode stickies-mode
   "Minor mode for buffers that are sticky notes.
 Applies the buffer's theme colors via a `default' face remap,
 hides the mode line, installs a header line with a close button,
 binds `mouse-3' to a context menu for changing themes, and closes
 the corresponding sticky note frame when the buffer is killed."
   :lighter " Stk"
-  :keymap stickies-note-mode-map
-  (if stickies-note-mode
+  :keymap stickies-mode-map
+  (if stickies-mode
       (progn
         (setq-local mode-line-format nil)
         (setq-local header-line-format '(:eval (stickies--header-line)))
@@ -1318,7 +1318,7 @@ echo area is still cleared as usual."
         (ignore-errors (delete-frame frame))))))
 
 (defun stickies--maybe-enable ()
-  "Enable `stickies-note-mode' for note files under `stickies-directory'.
+  "Enable `stickies-mode' for note files under `stickies-directory'.
 Only real notes qualify; `stickies--note-basename' already rejects
 hidden, backup and auto-save files, so visiting e.g. the index file
 leaves the mode off.
@@ -1328,8 +1328,8 @@ TTY the note file just opens normally."
   (when (and (display-graphic-p)
              buffer-file-name
              (stickies--note-basename buffer-file-name)
-             (not stickies-note-mode))
-    (stickies-note-mode 1)))
+             (not stickies-mode))
+    (stickies-mode 1)))
 
 (add-hook 'find-file-hook #'stickies--maybe-enable)
 (add-hook 'after-change-major-mode-hook #'stickies--maybe-enable)
@@ -1531,7 +1531,7 @@ Only supported on graphical frames."
            "Theme: "
            (mapcar (lambda (e) (symbol-name (car e))) stickies-themes)
            nil t))))
-  (unless stickies-note-mode
+  (unless stickies-mode
     (user-error "Not in a sticky note buffer"))
   (unless (assq name stickies-themes)
     (user-error "Unknown theme: %s" name))
@@ -1542,7 +1542,7 @@ Only supported on graphical frames."
   "Rename the current sticky note to NEW-BASENAME (within `stickies-directory')."
   (interactive
    (progn
-     (unless stickies-note-mode
+     (unless stickies-mode
        (user-error "Not in a sticky note buffer"))
      (list (read-string
             "New name: " (file-name-nondirectory buffer-file-name)))))
@@ -1592,7 +1592,7 @@ Only supported on graphical frames."
 (defun stickies-delete ()
   "Delete the current sticky note (with confirmation)."
   (interactive)
-  (unless stickies-note-mode
+  (unless stickies-mode
     (user-error "Not in a sticky note buffer"))
   (let ((basename (file-name-nondirectory buffer-file-name)))
     (when (yes-or-no-p (format "Delete sticky note %s? " basename))
