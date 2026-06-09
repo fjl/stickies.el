@@ -557,6 +557,7 @@ resize it vertically are undone, while width changes are kept."
     (if-let ((saved (stickies--rolled-up-p frame)))
         ;; Expand.
         (progn
+          (set-frame-parameter frame 'drag-internal-border t)
           (set-frame-parameter frame 'stickies-roll-saved-height nil)
           (set-frame-parameter frame 'stickies-roll-height nil)
           (set-frame-parameter frame 'stickies-roll-width nil)
@@ -565,6 +566,7 @@ resize it vertically are undone, while width changes are kept."
             (stickies--exit-rolled-up))
           (set-frame-height frame saved))
       ;; Roll up.
+      (set-frame-parameter frame 'drag-internal-border nil)
       (set-frame-parameter frame 'stickies-roll-saved-height
                            (frame-parameter frame 'height))
       (with-current-buffer (stickies--frame-buffer frame)
@@ -962,11 +964,13 @@ target or ATTEMPTS (default 20) is exhausted."
     (undecorated . t)
     (skip-taskbar . t)
     (drag-with-header-line . t)
+    (drag-internal-border . t)
     (unsplittable . t)
     (vertical-scroll-bars . nil)
     (internal-border-width . 1)
     (menu-bar-lines . 0)
-    (tool-bar-lines . 0))
+    (tool-bar-lines . 0)
+    (tab-bar-lines . 0))
   "Default frame parameters for sticky note frames.
 A `(stickies-note . BASENAME)' marker and a `minibuffer' pointing at the
 note's minibuffer child frame are added automatically (see
