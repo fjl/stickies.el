@@ -143,6 +143,12 @@ Set to nil to disable auto-saving."
   :type '(choice (number :tag "Seconds")
                  (const :tag "Off" nil)))
 
+(defcustom stickies-new-note-hook nil
+  "Hook run after a new sticky note has been created and opened.
+Each function is called with no arguments and with the new note's
+buffer current."
+  :type 'hook)
+
 
 ;;;; Index state and I/O
 
@@ -1443,7 +1449,9 @@ rename it afterwards."
     ;; the new file normally.
     (if (display-graphic-p)
         (stickies--make-frame basename)
-      (find-file path))))
+      (find-file path))
+    (with-current-buffer (find-file-noselect path)
+      (run-hooks 'stickies-new-note-hook))))
 
 ;;;###autoload
 (defun stickies-open (basename)
