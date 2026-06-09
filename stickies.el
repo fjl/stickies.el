@@ -467,18 +467,31 @@ The value is the pre-rolled frame height, in lines."
 (defvar-local stickies--roll-overlay nil
   "Marker overlay set while the sticky note's buffer is in rolled-up state.")
 
+(defconst stickies--roll-display-vars
+  '(cursor-type indicate-buffer-boundaries indicate-empty-lines)
+  "Display variables that will be unset while a note is rolled up.")
+
+(defvar-local stickies--roll-saved-vars nil
+  "Prior state of `stickies--roll-display-vars', for restore on roll-down.
+An alist of (SYMBOL LOCAL-P . VALUE).")
+
 (defun stickies--frame-buffer (frame)
   "Return the buffer shown in FRAME's root window."
   (window-buffer (frame-root-window frame)))
 
 (defun stickies--enter-rolled-up ()
   "Hide buffer content while the sticky note is rolled up.
-Keeps the real header line active so `drag-with-header-line' --
-Emacs's built-in, glitch-free frame drag -- continues to work.
-An invisible overlay covers the entire buffer so the (small)
-body row paints as blank under the header."
+Keeps the real header line active so `drag-with-header-line' continues
+to work. An invisible overlay blanks the (small) body row under the
+header."
   (unless stickies--roll-overlay
-    (setq-local cursor-type nil)
+    (setq stickies--roll-saved-vars
+          (mapcar (lambda (sym)
+                    (cons sym (cons (local-variable-p sym)
+                                    (symbol-value sym))))
+                  stickies--roll-display-vars))
+    (dolist (sym stickies--roll-display-vars)
+      (set (make-local-variable sym) nil))
     (let ((o (make-overlay (point-min) (point-max) nil nil t)))
       (overlay-put o 'invisible t)
       (setq stickies--roll-overlay o))))
@@ -488,7 +501,11 @@ body row paints as blank under the header."
   (when stickies--roll-overlay
     (delete-overlay stickies--roll-overlay)
     (setq stickies--roll-overlay nil)
-    (kill-local-variable 'cursor-type)))
+    (pcase-dolist (`(,sym ,local-p . ,value) stickies--roll-saved-vars)
+      (if local-p
+          (set (make-local-variable sym) value)
+        (kill-local-variable sym)))
+    (setq stickies--roll-saved-vars nil)))
 
 (defun stickies--apply-roll-height (frame)
   "Shrink FRAME to the minimal height with the header line still visible.
