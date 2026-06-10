@@ -494,9 +494,9 @@ An alist of (SYMBOL LOCAL-P . VALUE).")
 
 (defun stickies--enter-rolled-up ()
   "Hide buffer content while the sticky note is rolled up.
-Keeps the real header line active so `drag-with-header-line' continues
-to work. An invisible overlay blanks the (small) body row under the
-header."
+Keeps the real header line active so the header drag
+\(`stickies-drag-frame') continues to work.  An invisible overlay blanks
+the (small) body row under the header."
   (unless stickies--roll-overlay
     (setq stickies--roll-saved-vars
           (mapcar (lambda (sym)
@@ -529,17 +529,15 @@ which equals WINDOW_PIXEL_HEIGHT for a single-window frame -- so
 passing `frame_char_height + 1' is just enough to keep the
 header.  An invisible overlay added in `stickies--enter-rolled-up'
 hides whatever buffer content would otherwise paint in the
-resulting few-pixel body strip.  The achieved text height in
-*pixels* is recorded in `stickies-roll-height' so the resize hook
-can tell our own resize from an external one -- line granularity
-is too coarse here, since a sub-line drag can hide the header
-without changing the frame's height in lines."
+resulting few-pixel body strip.  The *requested* text height in
+pixels is recorded in `stickies-roll-height' so the resize hook
+can tell our own resize from an external one."
   (let ((window-min-height 0)
         (window-safe-min-height 0)
         (frame-resize-pixelwise t))
     (set-frame-height frame (1+ (frame-char-height frame)) nil t))
   (set-frame-parameter frame 'stickies-roll-height
-                       (frame-text-height frame))
+                       (1+ (frame-char-height frame)))
   ;; Record the rolled text width; the resize hook restores it (height is
   ;; pinned via `stickies-roll-height', position via `stickies-roll-anchor').
   (set-frame-parameter frame 'stickies-roll-width
@@ -549,8 +547,8 @@ without changing the frame's height in lines."
   "Toggle whether sticky note FRAME (default: the selected frame) is rolled up.
 When rolled up the body shrinks to one natural row -- the
 smallest size at which Emacs reliably keeps the header line
-visible, so `drag-with-header-line' continues to move the frame
-natively.  A rolled-up frame has a fixed height: attempts to
+visible, so the header drag (`stickies-drag-frame') continues to
+move the frame.  A rolled-up frame has a fixed height: attempts to
 resize it vertically are undone, while width changes are kept."
   (interactive)
   (let ((frame (or frame (selected-frame))))
@@ -614,6 +612,10 @@ resize it vertically are undone, while width changes are kept."
   (let ((m (make-sparse-keymap)))
     (define-key m [mouse-3] #'stickies--popup-menu)
     (define-key m [header-line mouse-3] #'stickies--popup-menu)
+    ;; Notes are moved by stickies' own drag loop (see
+    ;; `stickies-drag-frame'), not via the `drag-with-header-line' frame
+    ;; parameter and `mouse-drag-frame-move'.
+    (define-key m [header-line down-mouse-1] #'stickies-drag-frame)
     m)
   "Keymap for `stickies-mode'.")
 
@@ -668,23 +670,25 @@ with no Lisp parameter to disable it), so the corner is always an OS
 resize handle and we can't stop the drag; we slam the rolled size back on
 every resize event, pinning the size for the duration of the drag.
 
-The position must be re-imposed each event too: relying on
-`set-frame-width'/`-height' to keep the top-left lets the frame drift
-against AppKit's live resize until it flies off-screen.  We pin it to
+On the NS port, the position must be re-imposed each event too: relying
+on `set-frame-width'/`-height' to keep the top-left lets the frame drift
+against AppKit's live resize until it flies off-screen. We pin it to
 `stickies-roll-anchor' -- a snapshot of where the note sat when *this*
-drag began (taken in `stickies--constrain-size-on-resize').  Because that
+drag began (taken in `stickies--constrain-size-on-resize'). Because that
 anchor is read fresh per drag, never a long-lived stored position, it
 stops the drift without ever snapping the note back to a stale spot."
   (when (and (frame-live-p frame) (stickies--rolled-up-p frame))
-    (when-let ((w (frame-parameter frame 'stickies-roll-width))
-               (a (frame-parameter frame 'stickies-roll-anchor)))
+    (when-let ((w (frame-parameter frame 'stickies-roll-width)))
       (let ((stickies--restoring-roll t)
             (window-min-height 0)
             (window-safe-min-height 0)
-            (frame-resize-pixelwise t))
+            (frame-resize-pixelwise t)
+            (anchor (and (eq (window-system frame) 'ns)
+                         (frame-parameter frame 'stickies-roll-anchor))))
         (set-frame-width frame w nil t)
         (set-frame-height frame (1+ (frame-char-height frame)) nil t)
-        (set-frame-position frame (car a) (cdr a))))))
+        (when anchor
+          (set-frame-position frame (car anchor) (cdr anchor)))))))
 
 (defun stickies--constrain-size-on-resize (frame)
   "Hold sticky note FRAME within its size constraints after a resize.
@@ -723,33 +727,222 @@ losing the theme background."
 
 (add-hook 'window-size-change-functions #'stickies--constrain-size-on-resize)
 
-(defun stickies--resync-frame-position (&rest _)
-  "Correct a note frame's cached origin from the mouse before a header drag.
-On the NS port an OS resize moves the window origin without firing
-`windowDidMove', so Emacs's cached `frame-position' goes stale (there is no
-`windowDidResize' handler updating it).  `mouse-drag-frame-move' seeds its
-drag from that cache, so the first motion snaps the note back by the
-resize amount.
+(defvar stickies-drag-snap-distance 8
+  "Pixel radius within which a dragged note clings to another note's edge.
+Set to 0 to disable snapping.")
 
-The true origin is recoverable without the cache: the screen mouse
-position (`mouse-absolute-pixel-position') minus the frame-relative mouse
-position (`mouse-pixel-position') is the frame's real screen origin.  We
-set it -- the window doesn't move (it is already there), it just refreshes
-the cache -- so the ensuing drag starts from the right place.
+(defun stickies--drag-snap (left top width height edges)
+  "Magnetize a dragged note's position toward other notes' edges.
+LEFT/TOP is the position the pointer asks for, WIDTH/HEIGHT the dragged
+note's outer size, EDGES a list of (LEFT TOP RIGHT BOTTOM) outer edges of
+the other note frames.  Returns the possibly adjusted (LEFT . TOP).
 
-Advises `mouse-drag-frame-move'; a no-op for non-note frames."
+Because the drag loop recomputes LEFT/TOP from the absolute pointer
+delta on every motion event, clamping here automatically yields
+resistance on detach: the unclamped position must leave the snap radius
+before a different position is applied."
+  (let ((d stickies-drag-snap-distance)
+        (right (+ left width)) (bottom (+ top height))
+        (best-dx nil) (best-dy nil))
+    (pcase-dolist (`(,l ,tp ,r ,b) edges)
+      (let ((near-y (and (<= top (+ b d)) (>= bottom (- tp d))))
+            (near-x (and (<= left (+ r d)) (>= right (- l d)))))
+        (when near-y
+          (dolist (dx (list (- l right)      ; our right to its left
+                            (- r left)       ; our left to its right
+                            (- l left)       ; left edges align
+                            (- r right)))    ; right edges align
+            (when (and (<= (abs dx) d)
+                       (or (null best-dx) (< (abs dx) (abs best-dx))))
+              (setq best-dx dx))))
+        (when near-x
+          (dolist (dy (list (- tp bottom)    ; our bottom to its top
+                            (- b top)        ; our top to its bottom
+                            (- tp top)       ; top edges align
+                            (- b bottom)))   ; bottom edges align
+            (when (and (<= (abs dy) d)
+                       (or (null best-dy) (< (abs dy) (abs best-dy))))
+              (setq best-dy dy))))))
+    (cons (+ left (or best-dx 0)) (+ top (or best-dy 0)))))
+
+(defvar stickies--ns-screen-local-mouse 'unknown
+  "Whether `mouse-absolute-pixel-position' is monitor-local on this Emacs.
+See emacs bug#71912 for the report.
+
+The NS port's `ns-mouse-absolute-pixel-position' (nsfns.m) subtracts
+the origin of the screen showing the selected frame's window, so on a
+multi-monitor display it returns coordinates local to that monitor,
+while frame positions are global (relative to the primary monitor's
+top-left corner).")
+
+(defun stickies--ns-selected-monitor-origin ()
+  "Global origin (X . Y) of the monitor `mouse-absolute-pixel-position' uses.
+That is the monitor showing the selected frame's window: the NS code
+behind both the mouse position and the `frames' membership in
+`display-monitor-attributes-list' asks for the same \"screen of the
+frame's window\", so this lookup tracks the mouse function's reference
+point exactly, including the moment a dragged window's screen
+assignment flips mid-drag.  Returns nil if the frame is on no monitor
+\(window off-screen)."
+  (let ((sf (selected-frame)))
+    (catch 'hit
+      (dolist (mon (display-monitor-attributes-list))
+        (when (memq sf (cdr (assq 'frames mon)))
+          (let ((geom (cdr (assq 'geometry mon))))
+            (throw 'hit (cons (nth 0 geom) (nth 1 geom))))))
+      nil)))
+
+(defun stickies--ns-screen-local-mouse-p (raw origin)
+  "Measure whether RAW from `mouse-absolute-pixel-position' is monitor-local.
+ORIGIN is the global origin of the selected frame's monitor; the caller
+only asks when it is non-zero, otherwise local and global coincide and
+there is nothing to measure. The ground truth comes from
+`mouse-pixel-position', which converts through the frame's own window
+and is therefore unaffected by the bug: its frame-relative offset plus
+the frame's global edges is the true global mouse position. Whichever
+reading of RAW lands closer is the answer; monitor origins are hundreds
+of pixels while the slop in the estimate (frame-position cache
+staleness, native vs. inner edges) is tens, so the comparison cannot tip
+the wrong way. Returns t (bug present), nil (fixed), or `assume' when
+the mouse is not over a top-level frame and nothing can be
+measured (then treat the bug as present -- true for every NS Emacs to
+date -- but don't cache it)."
   (let* ((rel (mouse-pixel-position))
-         (frame (car rel)))
-    (when (and (framep frame)
-               (eq (framep-on-display frame) 'ns)
-               (frame-parameter frame 'stickies-note))
-      (let ((abs (mouse-absolute-pixel-position))
-            (rx (cadr rel))
-            (ry (cddr rel)))
-        (when (and (integerp rx) (integerp ry))
-          (set-frame-position frame (- (car abs) rx) (- (cdr abs) ry)))))))
+         (mframe (car rel)))
+    (if (not (and (framep mframe)
+                  (frame-live-p mframe)
+                  (not (frame-parent mframe))
+                  (integerp (cadr rel))
+                  (integerp (cddr rel))))
+        'assume
+      (let* ((edges (frame-edges mframe 'native-edges))
+             (truth-x (+ (nth 0 edges) (cadr rel)))
+             (truth-y (+ (nth 1 edges) (cddr rel)))
+             (raw-err (+ (abs (- (car raw) truth-x))
+                         (abs (- (cdr raw) truth-y))))
+             (fixed-err (+ (abs (- (+ (car raw) (car origin)) truth-x))
+                           (abs (- (+ (cdr raw) (cdr origin)) truth-y)))))
+        (< fixed-err raw-err)))))
 
-(advice-add 'mouse-drag-frame-move :before #'stickies--resync-frame-position)
+(defun stickies--mouse-absolute-pixel-position ()
+  "Like `mouse-absolute-pixel-position', but globally correct on NS.
+On the NS port the raw value is local to the monitor showing the
+selected frame's window (see `stickies--ns-screen-local-mouse').  A
+dragged note is normally the selected frame, so when it crosses onto
+another monitor the window's screen assignment flips and the raw
+position jumps by the monitor offset; the drag loop would compute a
+position back on the old monitor, the screen would flip back, and the
+note would flicker between the two monitors.  Adding the monitor's
+global origin restores true global coordinates; on the primary
+monitor the origin is (0 . 0) and the correction is the identity,
+which is exactly when the raw value is already right."
+  (let ((raw (mouse-absolute-pixel-position)))
+    (if (not (eq (window-system) 'ns))
+        raw
+      (let ((origin (stickies--ns-selected-monitor-origin)))
+        (if (or (null origin)
+                (and (zerop (car origin)) (zerop (cdr origin))))
+            raw
+          (let ((verdict stickies--ns-screen-local-mouse))
+            (when (eq verdict 'unknown)
+              (setq verdict (stickies--ns-screen-local-mouse-p raw origin))
+              (unless (eq verdict 'assume)
+                (setq stickies--ns-screen-local-mouse verdict)))
+            (if verdict
+                (cons (+ (car raw) (car origin))
+                      (+ (cdr raw) (cdr origin)))
+              raw)))))))
+
+(defun stickies--drag-note-frame (frame)
+  "Move note FRAME with the mouse until the dragging button is released.
+This is essentially a reimplementation of `mouse-drag-frame-move', with
+some additional bug fixes and edge snapping.
+
+Returns the non-motion event that ended the tracking."
+  ;; On NS, first correct the frame's cached origin from the mouse: an OS
+  ;; resize moves the window origin without firing `windowDidMove', so
+  ;; Emacs's cached `frame-position' goes stale (there is no
+  ;; `windowDidResize' handler updating it), and the drag would seed from
+  ;; that cache -- the first motion would snap the note back by the resize
+  ;; amount.  The true origin is recoverable without the cache: the screen
+  ;; mouse position (`stickies--mouse-absolute-pixel-position') minus the
+  ;; frame-relative mouse position (`mouse-pixel-position') is the frame's
+  ;; real screen origin.  Setting it doesn't move the window (it is already
+  ;; there), it just refreshes the cache.
+  (when (eq (window-system frame) 'ns)
+    (let ((screen (stickies--mouse-absolute-pixel-position))
+          (rel (mouse-pixel-position)))
+      (when (and (integerp (cadr rel)) (integerp (cddr rel)))
+        (let ((left (- (car screen) (cadr rel)))
+              (top  (- (cdr screen) (cddr rel)))
+              (pos  (frame-position frame)))
+          ;; only set if it's off by more than 2px
+          (when (or (> (abs (- left (car pos))) 2)
+                    (> (abs (- top (cdr pos))) 2))
+            (set-frame-position frame left top))))))
+  (run-hooks 'mouse-leave-buffer-hook)
+  (let* ((first-pos (frame-position frame))
+         (first-xy (stickies--mouse-absolute-pixel-position))
+         (outer (frame-edges frame 'outer-edges))
+         (width (- (nth 2 outer) (nth 0 outer)))
+         (height (- (nth 3 outer) (nth 1 outer)))
+         ;; Snap targets, snapshot once: the other notes cannot move
+         ;; while this loop has the mouse.
+         (snap-edges (and (> stickies-drag-snap-distance 0)
+                          (mapcan (lambda (f)
+                                    (and (not (eq f frame))
+                                         (frame-visible-p f)
+                                         (list (frame-edges f 'outer-edges))))
+                                  (stickies--frames))))
+         (echo-keystrokes 0)
+         (frame-resize-pixelwise t)
+         (track-mouse 'dragging)
+         ;; Without this, motion events are only generated when the
+         ;; pointer moves to a different glyph -- but the frame follows
+         ;; the pointer, so its frame-relative position barely changes
+         ;; and the loop starves after the first event.
+         (mouse-fine-grained-tracking t)
+         event)
+    (while (progn
+             (setq event (read-event))
+             (memq (car-safe event)
+                   '(mouse-movement switch-frame select-window
+                     scroll-bar-movement)))
+      (when (eq (car-safe event) 'mouse-movement)
+        (let* ((xy (stickies--mouse-absolute-pixel-position))
+               (left (+ (car first-pos) (- (car xy) (car first-xy))))
+               (top (+ (cdr first-pos) (- (cdr xy) (cdr first-xy))))
+               (pos (if snap-edges
+                        (stickies--drag-snap left top width height snap-edges)
+                      (cons left top))))
+          ;; The `(+ ...)' form keeps negative coordinates meaning
+          ;; "off-screen to the left/top", as `mouse-drag-frame-move' does.
+          (modify-frame-parameters
+           frame
+           `((left . (+ ,(car pos))) (top . (+ ,(cdr pos))))))))
+    event))
+
+(defun stickies--drag-release-p (event)
+  "Non-nil if EVENT is the button release concluding a real drag."
+  (and (eq (event-basic-type event) 'mouse-1)
+       (memq 'drag (event-modifiers event))))
+
+(defun stickies-drag-frame (event)
+  "Drag the sticky note under EVENT, following the mouse.
+Bound to `down-mouse-1' on the note's header line in `stickies-mode-map'.
+The release concluding a real drag is swallowed (replaying it would
+select another window); a plain click is re-dispatched, so the
+header-line buttons keep working."
+  (interactive "e")
+  (let* ((window (posn-window (event-start event)))
+         (frame (cond ((windowp window) (window-frame window))
+                      ((framep window) window))))
+    (if (not (and frame (frame-parameter frame 'stickies-note)))
+        ;; A note buffer shown in a non-note frame: stock behavior.
+        (mouse-drag-header-line event)
+      (let ((end (stickies--drag-note-frame frame)))
+        (unless (stickies--drag-release-p end)
+          (push end unread-command-events))))))
 
 
 ;;;; Auto-save
@@ -929,7 +1122,8 @@ first (primary) one when it overlaps none."
                        (left (max x (min (- (+ x w) fw) fl)))
                        (top  (max y (min (- (+ y h) fh) ft))))
             (unless (and (= left fl) (= top ft))
-              (set-frame-position frame left top))))))))
+              (let ((frame-resize-pixelwise t))
+                (set-frame-position frame left top)))))))))
 
 (defun stickies--roll-up-on-open (frame &optional attempts)
   "Roll up a newly created FRAME once the window manager honors the size.
@@ -963,7 +1157,6 @@ target or ATTEMPTS (default 20) is exhausted."
     (fullscreen . nil)
     (undecorated . t)
     (skip-taskbar . t)
-    (drag-with-header-line . t)
     (drag-internal-border . t)
     (unsplittable . t)
     (vertical-scroll-bars . nil)
