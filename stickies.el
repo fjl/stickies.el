@@ -1146,6 +1146,9 @@ the corresponding sticky note frame when the buffer is killed."
         ;; in whichever note currently has focus.
         (setq-local cursor-in-non-selected-windows nil)
         (setq-local truncate-lines nil)
+        ;; Since stickies frames are always dedicated to their buffer,
+        ;; ensure that switching to another non-note buffer will work.
+        (setq-local switch-to-buffer-in-dedicated-window 'pop)
         (stickies--apply-colors)
         (stickies--apply-text-scale)
         (stickies--ensure-auto-save-timer)
@@ -1154,6 +1157,7 @@ the corresponding sticky note frame when the buffer is killed."
     (kill-local-variable 'header-line-format)
     (kill-local-variable 'cursor-in-non-selected-windows)
     (kill-local-variable 'truncate-lines)
+    (kill-local-variable 'switch-to-buffer-in-dedicated-window)
     (stickies--exit-rolled-up)
     (remove-hook 'kill-buffer-hook #'stickies--on-buffer-killed t)))
 
