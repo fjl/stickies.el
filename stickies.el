@@ -424,6 +424,15 @@ an empty or whitespace-only note is deleted without prompting."
 The value is the pre-rolled frame height, in lines."
   (frame-parameter frame 'stickies-roll-saved-height))
 
+(defun stickies--persistent-roll-state (frame)
+  "The rolled-up state of FRAME as persisted and user-visible: t or nil.
+A peeked note (temporarily expanded, see `stickies--peek-down') still
+counts as rolled up: that is what it returns to, what the index
+records, and what the header-line arrow shows."
+  (and (or (stickies--rolled-up-p frame)
+           (frame-parameter frame 'stickies-roll-peek))
+       t))
+
 (defun stickies--button-roll (_event)
   "Header-line button: toggle the roll-up state of the current sticky note."
   (interactive "e")
@@ -438,8 +447,12 @@ The value is the pre-rolled frame height, in lines."
 (defun stickies--header-line ()
   "Return the header-line string for the current sticky note."
   (let* ((title (format-mode-line stickies-title-format))
+         ;; The arrow shows the *persisted* roll state: a temporarily
+         ;; expanded note (see `stickies--peek-down') keeps the
+         ;; rolled-up arrow, because rolled up is what it returns to.
          (roll (propertize
-                (if (stickies--rolled-up-p) " ↓ " " ↑ ")
+                (if (stickies--persistent-roll-state (selected-frame))
+                    " ↓ " " ↑ ")
                 'mouse-face 'stickies-roll-button-hover
                 'help-echo "mouse-1: roll up/down this sticky note"
                 'local-map stickies--roll-button-map))
@@ -543,34 +556,120 @@ can tell our own resize from an external one."
   (set-frame-parameter frame 'stickies-roll-width
                        (frame-text-width frame)))
 
+(defun stickies--roll-down (frame)
+  "Expand rolled-up note FRAME back to its pre-roll height.
+No-op when FRAME isn't rolled up.  Doesn't persist the state; that is
+the caller's business (`stickies-toggle-roll-up' does,
+`stickies--peek-down' deliberately doesn't)."
+  (when-let ((saved (stickies--rolled-up-p frame)))
+    (set-frame-parameter frame 'drag-internal-border t)
+    (set-frame-parameter frame 'stickies-roll-saved-height nil)
+    (set-frame-parameter frame 'stickies-roll-height nil)
+    (set-frame-parameter frame 'stickies-roll-width nil)
+    (set-frame-parameter frame 'stickies-roll-anchor nil)
+    (with-current-buffer (stickies--frame-buffer frame)
+      (stickies--exit-rolled-up))
+    (set-frame-height frame saved)))
+
+(defun stickies--roll-up (frame)
+  "Shrink note FRAME to its rolled-up titlebar size.
+No-op when FRAME is already rolled up.  Doesn't persist the state (see
+`stickies--roll-down')."
+  (unless (stickies--rolled-up-p frame)
+    (set-frame-parameter frame 'drag-internal-border nil)
+    (set-frame-parameter frame 'stickies-roll-saved-height
+                         (frame-parameter frame 'height))
+    (with-current-buffer (stickies--frame-buffer frame)
+      (stickies--enter-rolled-up))
+    (stickies--apply-roll-height frame)))
+
 (defun stickies-toggle-roll-up (&optional frame)
   "Toggle whether sticky note FRAME (default: the selected frame) is rolled up.
 When rolled up the body shrinks to one natural row -- the
 smallest size at which Emacs reliably keeps the header line
 visible, so the header drag (`stickies-drag-frame') continues to
 move the frame.  A rolled-up frame has a fixed height: attempts to
-resize it vertically are undone, while width changes are kept."
+resize it vertically are undone, while width changes are kept.
+
+The toggle acts on the *persisted* roll state, which is also what the
+header-line arrow shows: toggling a note that is only temporarily
+expanded (see `stickies--peek-down') makes the expansion permanent --
+visually nothing moves, the note just stops being rolled up."
   (interactive)
   (let ((frame (or frame (selected-frame))))
-    (if-let ((saved (stickies--rolled-up-p frame)))
-        ;; Expand.
+    (if (stickies--persistent-roll-state frame)
         (progn
-          (set-frame-parameter frame 'drag-internal-border t)
-          (set-frame-parameter frame 'stickies-roll-saved-height nil)
-          (set-frame-parameter frame 'stickies-roll-height nil)
-          (set-frame-parameter frame 'stickies-roll-width nil)
-          (set-frame-parameter frame 'stickies-roll-anchor nil)
-          (with-current-buffer (stickies--frame-buffer frame)
-            (stickies--exit-rolled-up))
-          (set-frame-height frame saved))
-      ;; Roll up.
-      (set-frame-parameter frame 'drag-internal-border nil)
-      (set-frame-parameter frame 'stickies-roll-saved-height
-                           (frame-parameter frame 'height))
-      (with-current-buffer (stickies--frame-buffer frame)
-        (stickies--enter-rolled-up))
-      (stickies--apply-roll-height frame))
+          (set-frame-parameter frame 'stickies-roll-peek nil)
+          (stickies--roll-down frame))
+      (stickies--roll-up frame))
     (stickies--save-frame-state frame)))
+
+;; A rolled-up note shows only its titlebar, so when the user explicitly
+;; switches to its buffer -- `switch-to-buffer', `find-file', a
+;; `display-buffer' that routes to the note's frame -- they are looking
+;; at something they cannot edit.  "Peeking" fixes that: the note is
+;; temporarily expanded and marked with the `stickies-roll-peek' frame
+;; parameter, then rolled back up when the peek's reason (the
+;; parameter's value) ends:
+;;
+;;   `selected'    the note's buffer was explicitly switched to
+;;                 (`stickies--show-note-frame'); released when the
+;;                 note stops being the selected frame
+;;                 (`stickies--unpeek-on-deselection').
+;;   `minibuffer'  a minibuffer read needs room over the note
+;;                 (`stickies--minibuffer-setup'); released when the
+;;                 read exits, with the deselection release as a
+;;                 safety net.
+;;
+;; Throughout a peek the note keeps being *persisted* as rolled up, so a
+;; session ending mid-peek restores it rolled; the header-line roll
+;; button likewise keeps showing the persisted (rolled) state, and
+;; toggling acts on that state (`stickies-toggle-roll-up').  Only the
+;; explicit buffer switch peeks.  Merely selecting or focusing the
+;; note's frame -- clicking it, `other-window'/`other-frame' cycling
+;; onto it, the focus landing of `stickies-toggle' -- leaves it rolled:
+;; the user is moving among frames, not asking to edit this note, and
+;; can press the roll button if they want it open.
+
+(defun stickies--peek-down (frame &optional reason)
+  "Temporarily expand rolled-up note FRAME, marked with REASON.
+REASON (default `selected') becomes the value of the
+`stickies-roll-peek' parameter and determines what rolls the note back
+up; see the commentary above.  A frame already peeked keeps its
+original reason -- in particular, a minibuffer read on a note that is
+peeked open for being selected must not re-mark it `minibuffer', or
+the read's exit would cut the selection peek short.  When FRAME's
+restored roll-up is still pending (a frame created moments ago, see
+`stickies--roll-up-on-open'), the mark alone makes that roll-up a
+no-op and the note simply stays expanded."
+  (unless (frame-parameter frame 'stickies-roll-peek)
+    (set-frame-parameter frame 'stickies-roll-peek (or reason 'selected)))
+  (stickies--roll-down frame))
+
+(defun stickies--unpeek-on-deselection (_frame)
+  "Roll peeked notes back up once they are no longer selected.
+On `window-selection-change-functions', which fires (at the next
+redisplay) for every way of moving away from a note: switching to
+another frame's window (`other-window', `other-frame'), clicking
+another frame, or a buffer switch elsewhere.  Selection sitting on a
+note's own minibuffer child frame is the one exception -- that is a
+minibuffer read *on* the note, not a move away from it.
+
+All peeked notes are checked, not just the frame this hook call is
+about: a note can lose the selection in two hops -- note to its
+minibuffer frame when a read starts (peek rightly kept), minibuffer
+frame to elsewhere when the read ends in a buffer switch -- and the
+second hop's change functions are called for the minibuffer frame and
+the switch target only, never for the note itself."
+  (dolist (frame (frame-list))
+    (when (and (frame-parameter frame 'stickies-roll-peek)
+               (not (eq frame (selected-frame)))
+               (not (eq (selected-frame)
+                        (frame-parameter frame 'stickies-minibuffer-frame))))
+      (set-frame-parameter frame 'stickies-roll-peek nil)
+      (stickies--roll-up frame))))
+
+(add-hook 'window-selection-change-functions #'stickies--unpeek-on-deselection)
 
 (defun stickies--popup-menu (event)
   "Show the sticky note context menu at EVENT location."
@@ -597,7 +696,7 @@ resize it vertically are undone, while width changes are kept."
                            :selected (stickies--always-on-top-p)]
                           ["Rolled up" stickies-toggle-roll-up
                            :style toggle
-                           :selected (stickies--rolled-up-p)]
+                           :selected (stickies--persistent-roll-state (selected-frame))]
                           "--"
                           ["Close note" delete-frame])))))
     ;; While the menu is open the command loop is in the middle of a key-sequence; after
@@ -976,7 +1075,7 @@ Writes the index file at most once even when several frames are dirty."
           (let ((cell (stickies--entry basename)))
             (when cell
               (let ((cur-params (stickies--frame-geometry frame))
-                    (cur-roll   (and (stickies--rolled-up-p frame) t))
+                    (cur-roll   (stickies--persistent-roll-state frame))
                     (cur-scale  (with-current-buffer (stickies--frame-buffer frame)
                                   (if (boundp 'text-scale-mode-amount)
                                       text-scale-mode-amount
@@ -1132,9 +1231,14 @@ character row, because the WM has not finished placing the frame
 -- leaving two text lines instead of just the header, and locking
 that height in as `stickies-roll-height'.  Re-apply the rolled-up
 height on short timers until the achieved text height reaches the
-target or ATTEMPTS (default 20) is exhausted."
+target or ATTEMPTS (default 20) is exhausted.
+
+Bails out if the frame has been peeked open in the meantime
+\(`stickies--peek-down'): the user just selected the note, so the
+restored roll-up is skipped and reinstated when the note is deselected."
   (let ((attempts (or attempts 20)))
-    (when (frame-live-p frame)
+    (when (and (frame-live-p frame)
+               (not (frame-parameter frame 'stickies-roll-peek)))
       (if (stickies--rolled-up-p frame)
           (stickies--apply-roll-height frame)
         (stickies-toggle-roll-up frame))
@@ -1231,7 +1335,7 @@ note's minibuffer child frame are added automatically (see
         (setf (alist-get :params (cdr cell))
               (stickies--frame-geometry frame))
         (setf (alist-get :rolled-up (cdr cell))
-              (and (stickies--rolled-up-p frame) t))
+              (stickies--persistent-roll-state frame))
         (stickies--save-index)))))
 
 (defun stickies--on-frame-deleted (frame)
@@ -1366,27 +1470,31 @@ are read in the note rather than the minibuffer)."
 
 (defun stickies--minibuffer-setup ()
   "Show a note's minibuffer frame over it during a minibuffer read.
-On `minibuffer-setup-hook'.  A rolled-up note has no room, so roll it
-down first and remember to roll it back up on exit."
+On `minibuffer-setup-hook'.  A rolled-up note has no room, so peek it
+open for the duration of the read (`stickies--peek-down' with reason
+`minibuffer'); `stickies--minibuffer-exit' rolls it back up.  A note
+already peeked open for being selected keeps that wider-scoped peek
+instead (see `stickies--peek-down')."
   (let* ((mini (window-frame (selected-window)))
          (note (frame-parameter mini 'stickies-minibuffer)))
     (when (frame-live-p note)
       (when (stickies--rolled-up-p note)
-        (set-frame-parameter note 'stickies-mini-rolled-down t)
-        (with-selected-frame note (stickies-toggle-roll-up)))
+        (stickies--peek-down note 'minibuffer))
       ;; Error handler that doesn't `discard-input' (see above).
       (setq-local command-error-function #'stickies--minibuffer-error-function)
       (stickies--show-minibuffer-frame mini note))))
 
 (defun stickies--minibuffer-exit ()
-  "Roll a note back up if `stickies--minibuffer-setup' rolled it down.
-On `minibuffer-exit-hook'."
+  "Roll a note back up if `stickies--minibuffer-setup' peeked it open.
+On `minibuffer-exit-hook'.  Only releases a peek made for this read
+\(reason `minibuffer'); a note peeked open for being selected stays
+down until the note is deselected."
   (let* ((mini (window-frame (selected-window)))
          (note (frame-parameter mini 'stickies-minibuffer)))
     (when (and (frame-live-p note)
-               (frame-parameter note 'stickies-mini-rolled-down))
-      (set-frame-parameter note 'stickies-mini-rolled-down nil)
-      (with-selected-frame note (stickies-toggle-roll-up)))))
+               (eq (frame-parameter note 'stickies-roll-peek) 'minibuffer))
+      (set-frame-parameter note 'stickies-roll-peek nil)
+      (stickies--roll-up note))))
 
 (defun stickies--isearch-show ()
   "Show the note's minibuffer frame for isearch's echo.
@@ -1575,14 +1683,26 @@ being created).  An existing frame is raised and focused; a note with no
 live frame gets a fresh one."
   (when (and (display-graphic-p) (not stickies--opening-frame))
     (when-let ((basename (stickies--buffer-note-basename buffer)))
-      (let ((frame (car (stickies--frames basename))))
+      (let ((frame (car (stickies--frames basename)))
+            created)
         (unless frame
           (let ((stickies--opening-frame t))
             (stickies--load-index)
-            (setq frame (stickies--make-frame basename))))
+            (setq frame (stickies--make-frame basename)
+                  created t)))
         (make-frame-visible frame)
         (raise-frame frame)
         (select-frame-set-input-focus frame)
+        ;; Showing the buffer is a request to interact with the note, so
+        ;; a rolled-up note is peeked open (until it is deselected).  For
+        ;; a frame created just now the restored roll-up is still
+        ;; pending (`stickies--roll-up-on-open' runs on a timer); the
+        ;; peek mark turns that roll-up into a no-op.
+        (when (or (stickies--rolled-up-p frame)
+                  (and created
+                       (alist-get :rolled-up
+                                  (cdr (stickies--entry basename)))))
+          (stickies--peek-down frame))
         frame))))
 
 (defun stickies--note-buffer-name-p (buffer-name &optional _action)
