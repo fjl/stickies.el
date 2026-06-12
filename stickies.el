@@ -638,10 +638,7 @@ REASON (default `selected') becomes the value of the
 up; see the commentary above.  A frame already peeked keeps its
 original reason -- in particular, a minibuffer read on a note that is
 peeked open for being selected must not re-mark it `minibuffer', or
-the read's exit would cut the selection peek short.  When FRAME's
-restored roll-up is still pending (a frame created moments ago, see
-`stickies--roll-up-on-open'), the mark alone makes that roll-up a
-no-op and the note simply stays expanded."
+the read's exit would cut the selection peek short."
   (unless (frame-parameter frame 'stickies-roll-peek)
     (set-frame-parameter frame 'stickies-roll-peek (or reason 'selected)))
   (stickies--roll-down frame))
@@ -1224,30 +1221,6 @@ first (primary) one when it overlaps none."
               (let ((frame-resize-pixelwise t))
                 (set-frame-position frame left top)))))))))
 
-(defun stickies--roll-up-on-open (frame &optional attempts)
-  "Roll up a newly created FRAME once the window manager honors the size.
-A resize issued right after `make-frame' is rounded up to a whole
-character row, because the WM has not finished placing the frame
--- leaving two text lines instead of just the header, and locking
-that height in as `stickies-roll-height'.  Re-apply the rolled-up
-height on short timers until the achieved text height reaches the
-target or ATTEMPTS (default 20) is exhausted.
-
-Bails out if the frame has been peeked open in the meantime
-\(`stickies--peek-down'): the user just selected the note, so the
-restored roll-up is skipped and reinstated when the note is deselected."
-  (let ((attempts (or attempts 20)))
-    (when (and (frame-live-p frame)
-               (not (frame-parameter frame 'stickies-roll-peek)))
-      (if (stickies--rolled-up-p frame)
-          (stickies--apply-roll-height frame)
-        (stickies-toggle-roll-up frame))
-      (when (and (> attempts 0)
-                 (> (frame-text-height frame)
-                    (1+ (frame-char-height frame))))
-        (run-with-timer 0.05 nil
-                        #'stickies--roll-up-on-open frame (1- attempts))))))
-
 ;; Only bound on the NS port; declared so the `let' binding in
 ;; `stickies--make-frame' is dynamic and the byte-compiler stays quiet.
 (defvar ns-use-native-fullscreen)
@@ -1282,7 +1255,12 @@ note's minibuffer child frame are added automatically (see
   ;; drops that behavior (the value is only read while the window is built),
   ;; keeping the note a normal-space window.
   (let ((ns-use-native-fullscreen nil)
-        (frame-resize-pixelwise t))
+        (frame-resize-pixelwise t)
+        ;; A note restored rolled up is created one text row tall (see
+        ;; below); without these the window minima silently bump the
+        ;; new frame to `window-min-height' rows.
+        (window-min-height 0)
+        (window-safe-min-height 0))
     (let* ((path (stickies--note-path basename))
            (entry (stickies--register basename))
            (saved-params (seq-filter #'cdr (alist-get :params (cdr entry))))
@@ -1290,12 +1268,15 @@ note's minibuffer child frame are added automatically (see
            ;; The note's minibuffer child frame -- created first so the note
            ;; can point its `minibuffer' parameter at its window.
            (mini-frame (stickies--make-minibuffer-frame))
-           ;; Order: per-note geometry first, then user defaults, then
-           ;; required markers last (so they always win).
+           ;; Order: required markers first (earlier entries win), then
+           ;; per-note geometry, then user defaults.
            (params (append `((stickies-note . ,basename)
                              (name . ,(format "Sticky note: %s" basename))
                              (minibuffer . ,(minibuffer-window mini-frame))
-                             (visibility . nil))
+                             (visibility . nil)
+                             ,@(when rolled-up
+                                 `((height . (text-pixels
+                                              . ,(1+ (frame-char-height mini-frame)))))))
                            saved-params
                            stickies--frame-parameters))
            (buffer (find-file-noselect path))
@@ -1315,13 +1296,22 @@ note's minibuffer child frame are added automatically (see
       ;; Restored geometry may point at a now-detached monitor; pull the
       ;; frame back onto a visible screen so it stays reachable.
       (stickies--clamp-frame-onscreen frame)
+      (when rolled-up
+        ;; Add rolled-up state state.
+        (set-frame-parameter frame 'drag-internal-border nil)
+        (set-frame-parameter frame 'stickies-roll-saved-height
+                             (or (alist-get 'height saved-params)
+                                 (alist-get 'height stickies--frame-parameters)))
+        (set-frame-parameter frame 'stickies-roll-height
+                             (1+ (frame-char-height frame)))
+        (set-frame-parameter frame 'stickies-roll-width
+                             (frame-text-width frame))
+        (with-current-buffer buffer
+          (stickies--enter-rolled-up)))
       ;; Reveal the fully-configured note.
       (make-frame-visible frame)
       ;; Force the minibuffer frame invisible, it gets mapped sometimes.
       (make-frame-invisible mini-frame t)
-      (when rolled-up
-        ;; Apply roll-up asynchronously.
-        (run-with-timer 0 nil #'stickies--roll-up-on-open frame))
       ;; Mark the frame fully built so size-change handlers may act on it
       ;; (see `stickies--constrain-size-on-resize').
       (set-frame-parameter frame 'stickies-ready t)
@@ -1683,25 +1673,17 @@ being created).  An existing frame is raised and focused; a note with no
 live frame gets a fresh one."
   (when (and (display-graphic-p) (not stickies--opening-frame))
     (when-let ((basename (stickies--buffer-note-basename buffer)))
-      (let ((frame (car (stickies--frames basename)))
-            created)
+      (let ((frame (car (stickies--frames basename))))
         (unless frame
           (let ((stickies--opening-frame t))
             (stickies--load-index)
-            (setq frame (stickies--make-frame basename)
-                  created t)))
+            (setq frame (stickies--make-frame basename))))
         (make-frame-visible frame)
         (raise-frame frame)
         (select-frame-set-input-focus frame)
         ;; Showing the buffer is a request to interact with the note, so
-        ;; a rolled-up note is peeked open (until it is deselected).  For
-        ;; a frame created just now the restored roll-up is still
-        ;; pending (`stickies--roll-up-on-open' runs on a timer); the
-        ;; peek mark turns that roll-up into a no-op.
-        (when (or (stickies--rolled-up-p frame)
-                  (and created
-                       (alist-get :rolled-up
-                                  (cdr (stickies--entry basename)))))
+        ;; a rolled-up note is peeked open (until it is deselected).
+        (when (stickies--rolled-up-p frame)
           (stickies--peek-down frame))
         frame))))
 
