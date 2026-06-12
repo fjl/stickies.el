@@ -1228,6 +1228,82 @@ first (primary) one when it overlaps none."
               (let ((frame-resize-pixelwise t))
                 (set-frame-position frame left top)))))))))
 
+(defun stickies--attach-position (frame)
+  "Choose where note FRAME, which has no saved position, should appear.
+Returns (LEFT . TOP) in global pixels.
+
+The anchor is the most recently used note (`stickies--mru-note-frame'
+-- the note just created before FRAME, when notes are created in a
+row, since `stickies-new' focuses the fresh note).  Tried in order:
+flush below
+the anchor with left edges aligned, flush above, flush to its left
+with top edges aligned, flush to its right -- the first position fully
+inside the anchor's monitor work area and overlapping no other note
+wins.  Consecutive new notes thus tile a column downward, then wind
+up and down through the next columns.
+
+When no side qualifies, the work area is scanned on a fixed 32px grid:
+the free spot closest to the anchor wins.  With no free spot left --
+the screen is full -- the spot covering the least area of other notes
+wins, ties resolved top-to-bottom, left-to-right, so a stream of new
+notes beyond the screen's capacity layers over it in the same
+predictable pattern instead of piling up in one place.
+
+With no anchor at all (very first note), the work area's top-left
+corner."
+  (pcase-let* ((anchor (stickies--mru-note-frame frame))
+               (`(,wx ,wy ,ww ,wh) (frame-monitor-workarea anchor)))
+    (if (not anchor)
+        (cons wx wy)
+      (pcase-let* ((`(,al ,at ,ar ,ab) (frame-edges anchor 'outer-edges))
+                   ;; FRAME is not mapped yet; its `frame-edges' are
+                   ;; meaningless, but its text size is already exact.
+                   ;; The outer size is that text size plus the
+                   ;; outer-vs-text overhead (borders, fringes), which
+                   ;; is read off the anchor -- a mapped frame with the
+                   ;; same parameters.
+                   (w (+ (frame-text-width frame)
+                         (- (- ar al) (frame-text-width anchor))))
+                   (h (+ (frame-text-height frame)
+                         (- (- ab at) (frame-text-height anchor))))
+                   (rects (cl-loop for f in (stickies--frames)
+                                   when (and (not (eq f frame))
+                                             (frame-visible-p f))
+                                   collect
+                                   (pcase-let ((`(,l ,tp ,r ,b)
+                                                (frame-edges f 'outer-edges)))
+                                     (list l tp (- r l) (- b tp)))))
+                   (covered (lambda (x y)
+                              (cl-loop for r in rects
+                                       sum (stickies--rect-overlap
+                                            x y (+ x w) (+ y h) r))))
+                   (inside (lambda (x y)
+                             (= (stickies--rect-overlap
+                                 x y (+ x w) (+ y h) (list wx wy ww wh))
+                                (* w h)))))
+        (or
+         (cl-loop for (x . y) in (list (cons al ab)        ; below
+                                       (cons al (- at h))  ; above
+                                       (cons (- al w) at)  ; left
+                                       (cons ar at))       ; right
+                  when (and (funcall inside x y)
+                            (zerop (funcall covered x y)))
+                  return (cons x y))
+         (let (free free-d any any-cov)
+           (cl-loop
+            for y from wy to (- (+ wy wh) h) by 32 do
+            (cl-loop
+             for x from wx to (- (+ wx ww) w) by 32 do
+             (let ((cov (funcall covered x y)))
+               (if (zerop cov)
+                   (let ((d (+ (abs (- x al)) (abs (- y at)))))
+                     (when (or (null free) (< d free-d))
+                       (setq free (cons x y) free-d d)))
+                 (when (or (null any) (< cov any-cov))
+                   (setq any (cons x y) any-cov cov))))))
+           (or free any))
+         (cons wx wy))))))
+
 ;; Only bound on the NS port; declared so the `let' binding in
 ;; `stickies--make-frame' is dynamic and the byte-compiler stays quiet.
 (defvar ns-use-native-fullscreen)
@@ -1300,6 +1376,13 @@ note's minibuffer child frame are added automatically (see
       ;; Position (and scale the font of) the minibuffer frame while the note
       ;; is still hidden, so it is fully configured before its first render.
       (stickies--position-minibuffer-frame mini-frame frame)
+      ;; A note without a saved position -- typically brand new -- is
+      ;; not left to the window manager's arbitrary placement: it opens
+      ;; attached to the most recently used note (see
+      ;; `stickies--attach-position').
+      (unless (assq 'left saved-params)
+        (let ((pos (stickies--attach-position frame)))
+          (set-frame-position frame (car pos) (cdr pos))))
       ;; Restored geometry may point at a now-detached monitor; pull the
       ;; frame back onto a visible screen so it stays reachable.
       (stickies--clamp-frame-onscreen frame)
@@ -1666,12 +1749,19 @@ nested display of the note buffer) while `stickies--make-frame' runs.")
     (when-let ((file (buffer-file-name buffer)))
       (stickies--note-basename file))))
 
-(defun stickies--mru-note-frame ()
-  "Return the most recently used, not rolled-up sticky note frame, or nil."
+(defun stickies--mru-note-frame (&optional exclude)
+  "Return the most recently used, not rolled-up sticky note frame, or nil.
+The buffer list is in most-recently-used order, so the first note
+buffer whose frame qualifies is the note the user last worked in.
+EXCLUDE, if non-nil, is a frame to skip: `stickies--attach-position'
+asks on behalf of a brand-new frame, which must not anchor to itself."
   (cl-loop for buffer in (buffer-list)
            for basename = (stickies--buffer-note-basename buffer)
            for frame = (and basename (car (stickies--frames basename)))
-           when (and frame (not (stickies--rolled-up-p frame))) return frame))
+           when (and frame
+                     (not (eq frame exclude))
+                     (not (stickies--rolled-up-p frame)))
+           return frame))
 
 (defun stickies--show-note-frame (buffer)
   "Reveal sticky note BUFFER in its own frame, creating the frame if needed.
@@ -1760,7 +1850,11 @@ rename it afterwards."
     ;; The note's own frame is a GUI-only affair; on a TTY just visit
     ;; the new file normally.
     (if (display-graphic-p)
-        (stickies--make-frame basename)
+        ;; Land focus on the fresh note, ready for typing.  This also
+        ;; makes it the most recently used note, so notes created in a
+        ;; row chain: each attaches to the previous one (see
+        ;; `stickies--attach-position').
+        (select-frame-set-input-focus (stickies--make-frame basename))
       (find-file path))
     (with-current-buffer (find-file-noselect path)
       (run-hooks 'stickies-new-note-hook))))
