@@ -836,29 +836,36 @@ the other note frames.  Returns the possibly adjusted (LEFT . TOP).
 Because the drag loop recomputes LEFT/TOP from the absolute pointer
 delta on every motion event, clamping here automatically yields
 resistance on detach: the unclamped position must leave the snap radius
-before a different position is applied."
+before a different position is applied.
+
+A neighbor the dragged note overlaps is skipped entirely: notes
+stacked (exactly or partly) on top of each other would otherwise cling
+to the buried note's edges while being dragged apart.  Exact adjacency
+-- the snapped state itself -- has zero intersection and doesn't count
+as overlap."
   (let ((d stickies-drag-snap-distance)
         (right (+ left width)) (bottom (+ top height))
         (best-dx nil) (best-dy nil))
     (pcase-dolist (`(,l ,tp ,r ,b) edges)
-      (let ((near-y (and (<= top (+ b d)) (>= bottom (- tp d))))
-            (near-x (and (<= left (+ r d)) (>= right (- l d)))))
-        (when near-y
-          (dolist (dx (list (- l right)      ; our right to its left
-                            (- r left)       ; our left to its right
-                            (- l left)       ; left edges align
-                            (- r right)))    ; right edges align
-            (when (and (<= (abs dx) d)
-                       (or (null best-dx) (< (abs dx) (abs best-dx))))
-              (setq best-dx dx))))
-        (when near-x
-          (dolist (dy (list (- tp bottom)    ; our bottom to its top
-                            (- b top)        ; our top to its bottom
-                            (- tp top)       ; top edges align
-                            (- b bottom)))   ; bottom edges align
-            (when (and (<= (abs dy) d)
-                       (or (null best-dy) (< (abs dy) (abs best-dy))))
-              (setq best-dy dy))))))
+      (unless (and (< left r) (> right l) (< top b) (> bottom tp))
+        (let ((near-y (and (<= top (+ b d)) (>= bottom (- tp d))))
+              (near-x (and (<= left (+ r d)) (>= right (- l d)))))
+          (when near-y
+            (dolist (dx (list (- l right)      ; our right to its left
+                              (- r left)       ; our left to its right
+                              (- l left)       ; left edges align
+                              (- r right)))    ; right edges align
+              (when (and (<= (abs dx) d)
+                         (or (null best-dx) (< (abs dx) (abs best-dx))))
+                (setq best-dx dx))))
+          (when near-x
+            (dolist (dy (list (- tp bottom)    ; our bottom to its top
+                              (- b top)        ; our top to its bottom
+                              (- tp top)       ; top edges align
+                              (- b bottom)))   ; bottom edges align
+              (when (and (<= (abs dy) d)
+                         (or (null best-dy) (< (abs dy) (abs best-dy))))
+                (setq best-dy dy)))))))
     (cons (+ left (or best-dx 0)) (+ top (or best-dy 0)))))
 
 (defvar stickies--ns-screen-local-mouse 'unknown
