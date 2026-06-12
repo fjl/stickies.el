@@ -1800,15 +1800,18 @@ default display."
     (frame-selected-window frame)))
 
 (defun stickies--switch-to-buffer-advice (orig buffer-or-name &rest args)
-  "Around `switch-to-buffer': show a sticky note in its own frame.
+  "Around `switch-to-buffer': route buffers in and out of note frames.
 When BUFFER-OR-NAME names a sticky note, reveal that note's frame
 \(creating it if needed) instead of showing the note in the current
-window.  ORIG is the wrapped `switch-to-buffer' and ARGS its remaining
-arguments, called unchanged otherwise."
-  (or (and buffer-or-name
-           (let ((buffer (get-buffer buffer-or-name)))
-             (and (stickies--show-note-frame buffer) buffer)))
-      (apply orig buffer-or-name args)))
+window. Conversely, a non-note buffer requested while a note frame is
+selected pops up in a non-note frame."
+  (cond
+   ((and buffer-or-name
+         (let ((buffer (get-buffer buffer-or-name)))
+           (and (stickies--show-note-frame buffer) buffer))))
+   ((and buffer-or-name (frame-parameter nil 'stickies-note))
+    (pop-to-buffer buffer-or-name nil (car args)))
+   (t (apply orig buffer-or-name args))))
 
 (advice-add 'switch-to-buffer :around #'stickies--switch-to-buffer-advice)
 
