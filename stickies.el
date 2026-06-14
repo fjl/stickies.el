@@ -3,6 +3,7 @@
 ;; Copyright (C) 2026 Felix Lange
 
 ;; Author: Felix Lange <fjl@twurst.com>
+;; Assisted-by: Claude:claude-4-opus
 ;; Maintainer: Felix Lange <fjl@twurst.com>
 ;; Version: 0.1.4
 ;; Package-Requires: ((emacs "29.1"))
