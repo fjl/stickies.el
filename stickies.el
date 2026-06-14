@@ -32,7 +32,7 @@
 ;; all the power of Emacs within the sticky notes.
 ;;
 ;; A note is created through the `stickies-new' command, or by simply creating
-;; a text file in `stickies-directory'. Each note is shown in a dedicated emacs
+;; a text file in `stickies-directory'. Each note is shown in a dedicated Emacs
 ;; frame. The on-screen position, and various other parameters of the frame are
 ;; stored in the index, a hidden file in the stickies-directory.
 ;; Changes made to sticky notes are auto-saved.
@@ -414,7 +414,9 @@ note frames are touched, so the buffer shown elsewhere stays normal."
 (defun stickies--button-close (event)
   "Header-line button: delete the sticky note whose button was clicked.
 A note with non-whitespace content is deleted only after confirmation;
-an empty or whitespace-only note is deleted without prompting."
+an empty or whitespace-only note is deleted without prompting.
+
+The frame this acts on is derived from EVENT."
   (interactive "e")
   (let* ((frame (window-frame (posn-window (event-start event))))
          (buffer (stickies--frame-buffer frame))
@@ -880,7 +882,7 @@ as overlap."
 
 (defvar stickies--ns-screen-local-mouse 'unknown
   "Whether `mouse-absolute-pixel-position' is monitor-local on this Emacs.
-See emacs bug#71912 for the report.
+See Emacs bug#71912 for the report.
 
 The NS port's `ns-mouse-absolute-pixel-position' (nsfns.m) subtracts
 the origin of the screen showing the selected frame's window, so on a
@@ -889,7 +891,7 @@ while frame positions are global (relative to the primary monitor's
 top-left corner).")
 
 (defun stickies--ns-selected-monitor-origin ()
-  "Global origin (X . Y) of the monitor `mouse-absolute-pixel-position' uses.
+  "Global origin (X . Y) of the monitor used by `mouse-absolute-pixel-position'.
 That is the monitor showing the selected frame's window: the NS code
 behind both the mouse position and the `frames' membership in
 `display-monitor-attributes-list' asks for the same \"screen of the
@@ -1190,7 +1192,7 @@ height so a restored frame doesn't come back as a tiny strip.
 dragged off the top/left edge) is read by `make-frame' as an offset from
 the opposite edge, flinging the note off-screen on restore.
 Parameters that are nil are dropped: persisting e.g. a nil `left'/`top'
-(as can happen for a not-yet-positioned frame) would feed nil back to
+\(as can happen for a not-yet-positioned frame) would feed nil back to
 `make-frame', which errors on some ports (NS: \"integerp, nil\")."
   (seq-filter
    #'cdr
@@ -1660,11 +1662,11 @@ frames keep whatever
 
 (defun stickies--set-message-function (_message)
   "Position a note's minibuffer frame before an echo message.
-This will be installed in `set-message-functions'. Plain messages do map
-the minibuffer, but don't go through `minibuffer-setup-hook' or
-isearch's hook.
+This will be installed in variable `set-message-functions'. Plain
+messages do map the minibuffer, but don't go through `minibuffer-setup-hook'
+or isearch's hook.
 
-Only acts on a plain message (no interactive read, minibuffer-depth
+Only acts on a plain message (no interactive read, `minibuffer-depth'
 zero): during a read, setup and `resize-mini-frames' already manage the
 frame, and this runs after Emacs has already mapped it."
   (let (suppress)
@@ -1808,7 +1810,9 @@ default display."
 When BUFFER-OR-NAME names a sticky note, reveal that note's frame
 \(creating it if needed) instead of showing the note in the current
 window. Conversely, a non-note buffer requested while a note frame is
-selected pops up in a non-note frame."
+selected pops up in a non-note frame.
+
+ORIG, the original function, will be called for non-sticky-note frames."
   (cond
    ((and buffer-or-name
          (let ((buffer (get-buffer buffer-or-name)))
@@ -1995,7 +1999,7 @@ Only supported on graphical frames."
 
 ;;;###autoload
 (defun stickies--note-blank-p (buffer)
-  "Return non-nil if note BUFFER holds nothing but whitespace."
+  "Return non-nil if note BUFFER has nothing but whitespace."
   (with-current-buffer buffer
     (not (string-match-p "[^[:space:]]" (buffer-string)))))
 
