@@ -27,10 +27,19 @@
 
 ;;; Commentary:
 
-;; Apple Stickies-style sticky notes for Emacs.  Each note is a flat
-;; file in `stickies-directory'.  The directory listing is the source
-;; of truth for which notes exist; the index file holds per-note
-;; metadata (theme, frame geometry).
+;; Sticky notes for Emacs. This package implements a facility for displaying text
+;; files in dedicated frames. It is inspired by macOS's Stickies.app, but gives
+;; all the power of Emacs within the sticky notes.
+;;
+;; A note is created through the `stickies-new' command, or by simply creating
+;; a text file in `stickies-directory'. Each note is shown in a dedicated emacs
+;; frame. The on-screen position, and various other parameters of the frame are
+;; stored in the index, a hidden file in the stickies-directory.
+;; Changes made to sticky notes are auto-saved.
+;;
+;; The `stickies-toggle' command shows or hides all sticky note files, restoring their
+;; positions and other attributes. It recommended to bind this command, and
+;; `stickies-new`, to an easily reachable global key.
 
 ;;; Code:
 
