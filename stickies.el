@@ -1649,38 +1649,32 @@ frames keep whatever
   "Non-nil while inside `stickies--set-message-function', to avoid re-entry.")
 
 (defun stickies--set-message-function (_message)
-  "Position a note's minibuffer frame before an echo message maps it.
-On the variable `set-message-functions'.  A plain message goes through neither
-`minibuffer-setup-hook' nor isearch's hook, so the note's minibuffer
-child frame would otherwise appear with whatever parameters were last
-set on it -- which a config that re-applies `default-frame-alist' to all
-frames may have clobbered.  Always returns nil, so the message itself is
-passed on to the rest of the list and displayed as usual.
+  "Position a note's minibuffer frame before an echo message.
+This will be installed in `set-message-functions'. Plain messages do map
+the minibuffer, but don't go through `minibuffer-setup-hook' or
+isearch's hook.
 
-Only acts on a plain message (no interactive read -- `minibuffer-depth'
+Only acts on a plain message (no interactive read, minibuffer-depth
 zero): during a read, setup and `resize-mini-frames' already manage the
 frame, and this runs after Emacs has already mapped it."
-  (unless stickies--in-set-message
-    (let* ((stickies--in-set-message t)
-           (frame (selected-frame))
-           (mini (and (zerop (minibuffer-depth))
-                      (frame-parameter frame 'stickies-note)
-                      (stickies--minibuffer-frame-of frame))))
-      (when mini
-        (stickies--position-minibuffer-frame mini frame))))
-  nil)
+  (let (suppress)
+    (unless stickies--in-set-message
+      (let* ((stickies--in-set-message t)
+             (frame (selected-frame)))
+        (when (and (zerop (minibuffer-depth))
+                   (frame-parameter frame 'stickies-note))
+          (if (current-idle-time)
+              (setq suppress t) ;; skip displaying idle message
+            (when-let ((mini (stickies--minibuffer-frame-of frame)))
+              (stickies--position-minibuffer-frame mini frame))))))
+    suppress))
 
 (defvar stickies--prev-clear-message-function nil
   "Value of `clear-message-function' from before stickies chained onto it.")
 
 (defun stickies--clear-message-function ()
   "Hide note minibuffer frames when the echo area is cleared.
-On `clear-message-function', which fires when the next input event
-arrives -- the precise moment a stray echo message goes away.  An active
-echo-area prompt (`y-or-n-p', `query-replace') is NOT cleared during its
-`read-event' wait, so its frame stays up, unlike with an idle timer that
-would take it down mid-prompt.  Chains to the previous function so the
-echo area is still cleared as usual."
+This will be installed as the `clear-message-function'."
   (stickies--hide-minibuffer-frames)
   (when (functionp stickies--prev-clear-message-function)
     (funcall stickies--prev-clear-message-function)))
